@@ -3,6 +3,8 @@ using System.Linq;
 using Mirror;
 public class Player : NetworkBehaviour
 {
+    public Room room;
+
     [SyncVar]
     public string playerName;
     [SyncVar]
@@ -12,15 +14,17 @@ public class Player : NetworkBehaviour
     [SyncVar]
     public bool isReady;
 
-    public override void OnStartServer()
-    {
-        int cardCnt = GameManager.Instance.CARDCOUNT;
-        for(int i = 1;i <= cardCnt;i++){ cards.Add(i); used.Add(false); }
-    }
-
     public int GetPlayerId()
     {
         return playerId;
+    }
+
+    public void Setup(Room room,int playerId)
+    {
+        this.room = room;
+        this.playerId = playerId;
+        int cardCnt = room.gameManager.CARDCOUNT;
+        for(int i = 1;i <= cardCnt;i++){ cards.Add(i); used.Add(false); }
     }
 
     [Command]
@@ -30,7 +34,7 @@ public class Player : NetworkBehaviour
         if(used[cardindex]) return;
         
         int id = GetPlayerId();
-        if (GameManager.Instance.UseCard(id, cardindex))
+        if (room.gameManager.UseCard(id, cardindex))
         {
             used[cardindex] = true;   
         }

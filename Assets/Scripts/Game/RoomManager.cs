@@ -21,13 +21,33 @@ public class RoomManager : NetworkBehaviour
     }
     #endregion
 
-    public Dictionary<string,RoomInfo> roomDict;
-    public SyncDictionary<string,string> roomNames;
+    [SerializeField] private GameObject GM;
 
-    [Command]
-    public void CmdJoinRoom(string roomId, string password = "****")
+    public Dictionary<string,RoomInfo> roomDict = new();
+    public SyncDictionary<string,string> roomNames = new();
+
+    [Command(requiresAuthority = false)]
+    public void CmdJoinRoom(string roomId, string password, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.ContainsKey(roomId)) return;
-        roomDict[roomId].room.JoinRoom(connectionToClient,password);
+        if(password == "") password = "****";
+        Debug.Log("Join to the room with id of " + roomId + ", password of " + password);
+        roomDict[roomId].room.JoinRoom(sender,password);
+    }
+
+    [Command(requiresAuthority = false)]
+    public void CmdCreateRoom(string roomId, string password)
+    {
+        if(roomDict.ContainsKey(roomId)) return;
+        if(password == "") password = "****";
+        Debug.Log("Create a room with id of " + roomId + ", password of " + password);
+        var gm = Instantiate(GM);
+        NetworkServer.Spawn(gm);
+        Room room = new Room(gm.GetComponent<GameManager>(),password);
+        RoomInfo roomInfo= new RoomInfo();
+        roomInfo.name = roomId;
+        roomInfo.password = password;
+        roomInfo.room = room;
+        roomDict[roomId] = roomInfo;
     }
 }

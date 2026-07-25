@@ -17,6 +17,8 @@ public class Room
     [Server]
     public void AddPlayer(NetworkConnectionToClient player)
     {
+        var playerCom = player.identity.GetComponent<Player>();
+        playerCom.Setup(this,players.Count);
         players.Add(player);
     }
 

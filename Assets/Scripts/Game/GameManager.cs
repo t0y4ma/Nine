@@ -5,21 +5,10 @@ using Unity.VisualScripting;
 
 public class GameManager : NetworkBehaviour
 {
-    public static GameManager Instance { get; private set;}
 
     private SyncList<bool> used_Players = new();
     
     [SyncVar] public int CARDCOUNT = 9;
-    
-    public override void OnStartServer()
-    {
-        if(Instance == null) Instance = this;
-    }
-
-    public override void OnStopServer()
-    {
-        if(Instance == this) Instance = null;
-    }
 
     [Server]
     public bool UseCard(int id,int cardindex)
