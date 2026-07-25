@@ -5,7 +5,7 @@ using Unity.VisualScripting;
 
 public class GameManager : NetworkBehaviour
 {
-
+    public Room room;
     private SyncList<bool> used_Players = new();
     
     [SyncVar] public int CARDCOUNT = 9;
@@ -17,5 +17,11 @@ public class GameManager : NetworkBehaviour
         if(used_Players[id*CARDCOUNT+cardindex]) return false;
         used_Players[id*CARDCOUNT+cardindex] = true;
         return true;
+    }
+
+    [Server]
+    public void DeleteMatch()
+    {
+        NetworkServer.Destroy(gameObject);
     }
 }

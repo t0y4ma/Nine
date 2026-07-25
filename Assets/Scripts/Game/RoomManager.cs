@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Mirror;
@@ -44,6 +45,9 @@ public class RoomManager : NetworkBehaviour
         var gm = Instantiate(GM);
         NetworkServer.Spawn(gm);
         Room room = new Room(gm.GetComponent<GameManager>(),password);
+        room.matchId = Guid.NewGuid();
+        room.roomId = roomId;
+        room.gameManager.GetComponent<NetworkMatch>().matchId = room.matchId;
         RoomInfo roomInfo= new RoomInfo();
         roomInfo.name = roomId;
         roomInfo.password = password;
