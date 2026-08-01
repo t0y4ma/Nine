@@ -23,14 +23,18 @@ public class Room
     {
         var playerCom = player.identity.GetComponent<Player>();
         playerCom.Setup(this,players.Count);
+        playerCom.gameManager = gameManager;
         player.identity.GetComponent<NetworkMatch>().matchId = matchId;
         players.Add(player);
+        gameManager.AddPlayer();
+
     }
 
     [Server]
     public void RemovePlayer(NetworkConnectionToClient player)
     {
         players.Remove(player);
+        player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;
         if(players.Count == 0) DeleteRoom();
     }
 
@@ -40,7 +44,6 @@ public class Room
         RoomManager.Instance.roomDict.Remove(roomId);
         RoomManager.Instance.roomNames.Remove(roomId);
         gameManager.DeleteMatch();
-        
     }
 
     [Server]

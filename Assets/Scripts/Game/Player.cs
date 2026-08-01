@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Mirror;
+using UnityEngine;
+using UnityEngine.Analytics;
 public class Player : NetworkBehaviour
 {
     public Room room;
@@ -9,10 +11,13 @@ public class Player : NetworkBehaviour
     public string playerName;
     [SyncVar]
     public int playerId;
-    public SyncList<int> cards = new();
-    public SyncList<bool> used = new();
     [SyncVar]
-    public bool isReady;
+    public GameManager gameManager;
+    public readonly SyncList<int> cards = new();
+    public readonly SyncList<bool> used = new();
+
+    [SyncVar(hook = "OnReadyToTurnChanged")]
+    public bool isReadytoTurn;
 
     public int GetPlayerId()
     {
@@ -36,7 +41,15 @@ public class Player : NetworkBehaviour
         int id = GetPlayerId();
         if (room.gameManager.UseCard(id, cardindex))
         {
-            used[cardindex] = true;   
+            used[cardindex] = true; 
+            isReadytoTurn = true;
         }
+    }
+
+    [ClientCallback]
+    public void OnReadyToTurnChanged(bool oldVar, bool newVar)
+    {
+        GameObject.Find("Manager").GetComponent<UIEventsManager>().RefreshMyCardView(used.ToList(),used.Count);
+        GameObject.Find("Manager").GetComponent<UIEventsManager>().RefreshAllCardView(gameManager.used_Players.ToList(), gameManager.used_Players.Count);
     }
 }

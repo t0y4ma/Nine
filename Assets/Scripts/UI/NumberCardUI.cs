@@ -1,38 +1,41 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 public class NumberCardUI : MonoBehaviour
 {
     public bool isUsed = false;
     private int number;
-    private Image background;
-    private TMP_Text numberText;
-
-    public void Start()
-    {
-        background = GetComponentInChildren<Image>();
-        numberText = GetComponentInChildren<TMP_Text>();
-    }
+    [SerializeField] private TMP_Text numberText;
+    [SerializeField] private Button button;
+    private ColorBlock colorBlock;
 
     public void Setup(int number)
     {
         this.number = number;
         numberText.text = number.ToString();
+        colorBlock = new ColorBlock();
+        colorBlock.normalColor = Color.white;
+        colorBlock.disabledColor = new Color(0.5f,0.5f,0.5f,1);
+        colorBlock.pressedColor = new Color(0.25f,0.25f,0.25f,1);
     }
 
     public void SetUsed(bool isUsed)
     {
-        this.isUsed = isUsed;
+        button.interactable = !isUsed;
         if (isUsed)
         {
-            background.color = new Color(63,63,63,0);
             numberText.color = Color.white;
         }
         else
         {
-            background.color = Color.white;
-            numberText.color = Color.white;
+            numberText.color = Color.black;
         }
+    }
+
+    public void SetListener(UnityAction listener)
+    {
+        button.onClick.AddListener(listener);
     }
 }

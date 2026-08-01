@@ -25,7 +25,7 @@ public class RoomManager : NetworkBehaviour
     [SerializeField] private GameObject GM;
 
     public Dictionary<string,RoomInfo> roomDict = new();
-    public SyncDictionary<string,string> roomNames = new();
+    public readonly SyncDictionary<string,string> roomNames = new();
 
     [Command(requiresAuthority = false)]
     public void CmdJoinRoom(string roomId, string password, NetworkConnectionToClient sender = null)
@@ -53,5 +53,25 @@ public class RoomManager : NetworkBehaviour
         roomInfo.password = password;
         roomInfo.room = room;
         roomDict[roomId] = roomInfo;
+    }
+
+    [Command(requiresAuthority = false)]
+    public void CmdStartGame(string roomId, NetworkConnectionToClient sender = null)
+    {
+        if (!roomDict.TryGetValue(roomId, out var info)) return;
+        Debug.Log("Start the game in the room with id of " + roomId);
+        info.room.gameManager.StartGame();
+    }
+
+    [ClientCallback]
+    public override void OnStartClient()
+    {
+        roomNames.OnChange += OnRoomsChanged;
+    }
+
+    [ClientCallback]
+    public void OnRoomsChanged(SyncIDictionary<string, string>.Operation op, string key, string item)
+    {
+        
     }
 }
