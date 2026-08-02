@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Mirror;
 using UnityEngine;
-using UnityEngine.Analytics;
+
 public class Player : NetworkBehaviour
 {
     public Room room;
@@ -13,6 +13,7 @@ public class Player : NetworkBehaviour
     public int playerId;
     [SyncVar]
     public GameManager gameManager;
+
     public readonly SyncList<int> cards = new();
     public readonly SyncList<bool> used = new();
 
@@ -33,27 +34,27 @@ public class Player : NetworkBehaviour
         return playerId;
     }
 
-public void Setup(Room room,int playerId)
+    public void Setup(Room room, int playerId)
     {
         this.room = room;
         this.playerId = playerId;
         int cardCnt = room.gameManager.CARDCOUNT;
-        for(int i = 1;i <= cardCnt;i++){ cards.Add(i); used.Add(false); }
+        for (int i = 1; i <= cardCnt; i++) { cards.Add(i); used.Add(false); }
         inRoom = true;
     }
 
-[Command]
+    [Command]
     public void CmdSetReady(bool ready)
     {
-        if(room == null) return;
-        if(gameManager != null && gameManager.inProgress) return;
+        if (room == null) return;
+        if (gameManager != null && gameManager.inProgress) return;
         isReadyToStart = ready;
-        if(gameManager != null) gameManager.RefreshLobbyStatus();
+        if (gameManager != null) gameManager.RefreshLobbyStatus();
     }
 
     private void OnInRoomChanged(bool oldVal, bool newVal)
     {
-        if(!isOwned) return;
+        if (!isOwned) return;
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.RefreshLobbyPanels();
     }
@@ -64,20 +65,18 @@ public void Setup(Room room,int playerId)
         uiManager?.RefreshLobbyPanels();
     }
 
-private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
+    private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.RefreshRoundResultPanel();
     }
 
-
-
-[Command]
+    [Command]
     public void CmdUseCard(int cardindex)
     {
-        if(cardindex < 0 || cardindex >= cards.Count) return;
-        if(used[cardindex]) return;
-        if(isReadytoTurn) return;
+        if (cardindex < 0 || cardindex >= cards.Count) return;
+        if (used[cardindex]) return;
+        if (isReadytoTurn) return;
 
         int id = GetPlayerId();
         if (room.gameManager.UseCard(id, cardindex))
@@ -86,25 +85,24 @@ private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
         }
     }
 
-[Command]
+    [Command]
     public void CmdReadyForNextRound()
     {
-        if(gameManager == null) return;
+        if (gameManager == null) return;
         isReadyForNextRound = true;
     }
-
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
     // デバッグ専用: Command(オーナー権限)を経由せず、サーバー上で直接どのプレイヤーとしても操作できる
     [Server]
     public bool DebugUseCard(int cardindex)
     {
-        if(cardindex < 0 || cardindex >= cards.Count) return false;
-        if(used[cardindex]) return false;
-        if(isReadytoTurn) return false;
+        if (cardindex < 0 || cardindex >= cards.Count) return false;
+        if (used[cardindex]) return false;
+        if (isReadytoTurn) return false;
 
         int id = GetPlayerId();
-        if(room.gameManager.UseCard(id, cardindex))
+        if (room.gameManager.UseCard(id, cardindex))
         {
             used[cardindex] = true;
             return true;
@@ -112,29 +110,21 @@ private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
         return false;
     }
 
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
     // デバッグ専用: オーナー権限のないBotプレイヤーのReady状態を直接設定する
     [Server]
     public void DebugSetReady(bool ready)
     {
-        if(room == null) return;
-        if(gameManager != null && gameManager.inProgress) return;
+        if (room == null) return;
+        if (gameManager != null && gameManager.inProgress) return;
         isReadyToStart = ready;
-        if(gameManager != null) gameManager.RefreshLobbyStatus();
+        if (gameManager != null) gameManager.RefreshLobbyStatus();
     }
 
-// デバッグ専用: オーナー権限のないBotプレイヤーの「次へ」準備状態を直接設定する
+    // デバッグ専用: オーナー権限のないBotプレイヤーの「次へ」準備状態を直接設定する
     [Server]
     public void DebugReadyForNextRound()
     {
         isReadyForNextRound = true;
     }
-
 #endif
-
-#endif
-
-
-
 }

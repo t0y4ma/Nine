@@ -4374,6 +4374,7 @@ MonoBehaviour:
   cardUI: {fileID: 5909007150741934940, guid: f2ae80cb8c448f646a85dfdc9caa6cd9, type: 3}
   connectPanel: {fileID: 2015381140}
   addressInput: {fileID: 961304871}
+  hostButtonGO: {fileID: 764676427}
   roomCreateButtonGO: {fileID: 695383870}
   roomJoinButtonGO: {fileID: 208724324}
   lobbyPanel: {fileID: 1518317833}

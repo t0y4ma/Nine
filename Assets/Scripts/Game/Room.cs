@@ -12,7 +12,7 @@ public class Room
     public Guid matchId;
     public string roomId;
 
-    public Room(GameManager gameManager,string password)
+    public Room(GameManager gameManager, string password)
     {
         this.gameManager = gameManager;
         this.gameManager.room = this;
@@ -20,12 +20,12 @@ public class Room
         players = new List<NetworkConnectionToClient>();
     }
 
-[Server]
+    [Server]
     public void AddPlayer(NetworkConnectionToClient player)
     {
         var playerCom = player.identity.GetComponent<Player>();
         int id = playerComponents.Count;
-        playerCom.Setup(this,id);
+        playerCom.Setup(this, id);
         playerCom.gameManager = gameManager;
         player.identity.GetComponent<NetworkMatch>().matchId = matchId;
         players.Add(player);
@@ -34,14 +34,14 @@ public class Room
         gameManager.RefreshLobbyStatus();
     }
 
-[Server]
+    [Server]
     public void RemovePlayer(NetworkConnectionToClient player)
     {
         var playerCom = player.identity.GetComponent<Player>();
         players.Remove(player);
         playerComponents.Remove(playerCom);
         player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;
-        if(players.Count == 0) { DeleteRoom(); return; }
+        if (players.Count == 0) { DeleteRoom(); return; }
         gameManager.RefreshLobbyStatus();
     }
 
@@ -67,7 +67,6 @@ public class Room
     }
 #endif
 
-
     [Server]
     public void DeleteRoom()
     {
@@ -76,21 +75,20 @@ public class Room
         gameManager.DeleteMatch();
     }
 
-[Server]
-    public void JoinRoom(NetworkConnectionToClient conn,string password)
+    [Server]
+    public void JoinRoom(NetworkConnectionToClient conn, string password)
     {
-        if(this.password != password) return;
-        if(gameManager.inProgress) return;
+        if (this.password != password) return;
+        if (gameManager.inProgress) return;
 
         AddPlayer(conn);
     }
 
-
-[Server]
+    [Server]
     public bool AllPlayersReady()
     {
-        if(playerComponents.Count < 2) return false;
-        foreach(var p in playerComponents) if(!p.isReadyToStart) return false;
+        if (playerComponents.Count < 2) return false;
+        foreach (var p in playerComponents) if (!p.isReadyToStart) return false;
         return true;
     }
 }
