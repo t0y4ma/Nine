@@ -9,6 +9,10 @@ public class myNetworkManager : NetworkManager
     // have to cast to this type everywhere.
     public static new myNetworkManager singleton => (myNetworkManager)NetworkManager.singleton;
 
+    // "Manager"(ロビーUI)は接続確立後にしかアクティブにならないため、
+    // 接続失敗の判定・表示は常時アクティブなこのクラス側で完結させる。
+    private static bool _hasEverConnected = false;
+
     private void Start()
     {
         // VM/専用サーバー向けビルド(Dedicated Serverビルド、または -server 起動引数)の場合、
@@ -32,10 +36,22 @@ public class myNetworkManager : NetworkManager
 #endif
     }
 
+    public override void OnClientConnect()
+    {
+        _hasEverConnected = true;
+        base.OnClientConnect();
+    }
+
     public override void OnClientDisconnect()
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
-        uiManager?.OnConnectionFailed();
+        if (!_hasEverConnected)
+        {
+            // "Manager"(ロビーUI)は未接続時は非アクティブで見つからないため、
+            // 常に存在するStatusTextを直接操作して失敗を知らせる
+            var statusGo = GameObject.Find("StatusText");
+            var tmp = statusGo != null ? statusGo.GetComponent<TMPro.TextMeshProUGUI>() : null;
+            if (tmp != null) tmp.text = "Could not find a server to connect to.";
+        }
         base.OnClientDisconnect();
     }
 

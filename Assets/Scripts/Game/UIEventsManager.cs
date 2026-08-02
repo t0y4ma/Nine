@@ -44,7 +44,6 @@ public class UIEventsManager : NetworkBehaviour
     private int _selectedCardIndex = -1;
     private Coroutine _cutInCoroutine;
     private bool _lastConnected = false;
-    private bool _hasEverConnected = false;
 
     private void Start()
     {
@@ -59,16 +58,11 @@ public class UIEventsManager : NetworkBehaviour
     }
 
     // 接続に失敗した(一度も繋がらないまま切断された)場合、その旨を表示する
-    public void OnConnectionFailed()
-    {
-        if (_hasEverConnected) return; // 一度でも繋がっていたなら通常の切断なので何もしない
-        ShowResult("Could not find a server to connect to.");
-    }
+
 
     private void Update()
     {
         bool connected = NetworkClient.isConnected;
-        if (connected) _hasEverConnected = true;
         if (connected != _lastConnected)
         {
             _lastConnected = connected;
