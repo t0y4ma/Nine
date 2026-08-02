@@ -53,25 +53,31 @@ public class RoomManager : NetworkBehaviour
         roomInfo.password = password;
         roomInfo.room = room;
         roomDict[roomId] = roomInfo;
+        roomNames.Add(roomId, roomId);
     }
 
-    [Command(requiresAuthority = false)]
+[Command(requiresAuthority = false)]
     public void CmdStartGame(string roomId, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.TryGetValue(roomId, out var info)) return;
+        if (sender != NetworkServer.localConnection) return; // ホストのみ開始可能
+        if (!info.room.AllPlayersReady()) return; // 全員準備完了するまで開始不可
         Debug.Log("Start the game in the room with id of " + roomId);
         info.room.gameManager.StartGame();
     }
 
-    [ClientCallback]
+[ClientCallback]
     public override void OnStartClient()
     {
         roomNames.OnChange += OnRoomsChanged;
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshRoomList();
     }
 
-    [ClientCallback]
+[ClientCallback]
     public void OnRoomsChanged(SyncIDictionary<string, string>.Operation op, string key, string item)
     {
-        
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshRoomList();
     }
 }

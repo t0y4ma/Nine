@@ -105,3 +105,10 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Claude Code personal settings (not shared with the team)
+/.claude/settings.local.json
+
+# デバッグ用スクリーンショットとWindowsビルド成果物は管理対象外(WebGLビルドのみGit管理)
+/Assets/Screenshots/
+/Versions/Windows/
