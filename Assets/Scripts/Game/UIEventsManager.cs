@@ -44,16 +44,31 @@ public class UIEventsManager : NetworkBehaviour
     private int _selectedCardIndex = -1;
     private Coroutine _cutInCoroutine;
     private bool _lastConnected = false;
+    private bool _hasEverConnected = false;
 
     private void Start()
     {
         ConfigureWebGLTransport();
         RefreshLobbyPanels();
+
+        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる
+        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        {
+            ButtonConnect();
+        }
+    }
+
+    // 接続に失敗した(一度も繋がらないまま切断された)場合、その旨を表示する
+    public void OnConnectionFailed()
+    {
+        if (_hasEverConnected) return; // 一度でも繋がっていたなら通常の切断なので何もしない
+        ShowResult("Could not find a server to connect to.");
     }
 
     private void Update()
     {
         bool connected = NetworkClient.isConnected;
+        if (connected) _hasEverConnected = true;
         if (connected != _lastConnected)
         {
             _lastConnected = connected;
@@ -190,7 +205,7 @@ public class UIEventsManager : NetworkBehaviour
         var localPlayer = NetworkClient.connection?.identity?.GetComponent<Player>();
         bool inRoom = localPlayer != null && localPlayer.inRoom;
         bool inGame = inRoom && localPlayer.gameManager != null && localPlayer.gameManager.inProgress;
-        bool isHost = NetworkServer.active;
+        bool isHost = localPlayer != null && localPlayer.isRoomHost;
 
         if (connectPanel != null) connectPanel.SetActive(!connected);
         if (serverButtonGO != null) serverButtonGO.SetActive(IsServerModeAllowed());

@@ -12,6 +12,9 @@ public class Room
     public Guid matchId;
     public string roomId;
 
+    // この部屋を作成したクライアントの接続。Start権限はサーバー側ではなくこの接続に紐付く。
+    public NetworkConnectionToClient hostConnection;
+
     public Room(GameManager gameManager, string password)
     {
         this.gameManager = gameManager;
@@ -27,6 +30,7 @@ public class Room
         int id = playerComponents.Count;
         playerCom.Setup(this, id);
         playerCom.gameManager = gameManager;
+        playerCom.isRoomHost = (player == hostConnection);
         player.identity.GetComponent<NetworkMatch>().matchId = matchId;
         players.Add(player);
         playerComponents.Add(playerCom);

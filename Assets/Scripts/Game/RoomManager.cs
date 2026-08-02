@@ -37,7 +37,7 @@ public class RoomManager : NetworkBehaviour
     }
 
     [Command(requiresAuthority = false)]
-    public void CmdCreateRoom(string roomId, string password)
+    public void CmdCreateRoom(string roomId, string password, NetworkConnectionToClient sender = null)
     {
         if (roomDict.ContainsKey(roomId)) return;
         if (password == "") password = "****";
@@ -49,6 +49,7 @@ public class RoomManager : NetworkBehaviour
         Room room = new Room(gm.GetComponent<GameManager>(), password);
         room.matchId = Guid.NewGuid();
         room.roomId = roomId;
+        room.hostConnection = sender; // このコマンドを送ってきたクライアントがホスト権限を持つ
         room.gameManager.GetComponent<NetworkMatch>().matchId = room.matchId;
 
         RoomInfo roomInfo = new RoomInfo();
@@ -63,7 +64,7 @@ public class RoomManager : NetworkBehaviour
     public void CmdStartGame(string roomId, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.TryGetValue(roomId, out var info)) return;
-        if (sender != NetworkServer.localConnection) return; // ホストのみ開始可能
+        if (sender != info.room.hostConnection) return; // 部屋を作成したクライアントのみ開始可能(サーバー自体には権限がない)
         if (!info.room.AllPlayersReady()) return; // 全員準備完了するまで開始不可
 
         Debug.Log("Start the game in the room with id of " + roomId);

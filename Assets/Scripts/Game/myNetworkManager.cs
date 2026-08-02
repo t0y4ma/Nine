@@ -32,6 +32,13 @@ public class myNetworkManager : NetworkManager
 #endif
     }
 
+    public override void OnClientDisconnect()
+    {
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.OnConnectionFailed();
+        base.OnClientDisconnect();
+    }
+
     public override void OnServerDisconnect(NetworkConnectionToClient conn)
     {
         var playerCon = conn.identity.GetComponent<Player>();

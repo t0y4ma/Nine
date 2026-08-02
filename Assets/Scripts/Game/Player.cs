@@ -29,6 +29,9 @@ public class Player : NetworkBehaviour
     [SyncVar]
     public bool isReadyForNextRound;
 
+    [SyncVar]
+    public bool isRoomHost;
+
     public int GetPlayerId()
     {
         return playerId;
