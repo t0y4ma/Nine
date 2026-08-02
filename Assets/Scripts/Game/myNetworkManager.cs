@@ -10,16 +10,26 @@ public class myNetworkManager : NetworkManager
     public static new myNetworkManager singleton => (myNetworkManager)NetworkManager.singleton;
 
     // "Manager"(ロビーUI)は接続確立後にしかアクティブにならないため、
-    // 接続失敗の判定・表示は常時アクティブなこのクラス側で完結させる。
+    // 接続前に必要な処理(自動接続・トランスポート設定・接続失敗判定)は
+    // 常時アクティブなこのクラス側で完結させる。
     private static bool _hasEverConnected = false;
 
     private void Start()
     {
+        ConfigureWebGLTransport();
+
         // VM/専用サーバー向けビルド(Dedicated Serverビルド、または -server 起動引数)の場合、
         // 起動した瞬間に自動でサーバーとして立ち上がる(UIクリック不要)
         if (ShouldAutoStartServer())
         {
             StartServer();
+            return;
+        }
+
+        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる
+        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        {
+            StartClient();
         }
     }
 
@@ -34,6 +44,21 @@ public class myNetworkManager : NetworkManager
         }
         return false;
 #endif
+    }
+
+    // WebGLでHTTPS配信されている場合はwss(暗号化WebSocket)を使う必要がある。
+    // ブラウザはHTTPSページから非暗号化のws://接続を許可しないため。
+    private void ConfigureWebGLTransport()
+    {
+        if (Application.platform != RuntimePlatform.WebGLPlayer) return;
+        var transport = Transport.active;
+        if (transport == null) return;
+
+        var wssField = transport.GetType().GetField("clientUseWss");
+        if (wssField == null) return;
+
+        bool useWss = Application.absoluteURL.StartsWith("https");
+        wssField.SetValue(transport, useWss);
     }
 
     public override void OnClientConnect()

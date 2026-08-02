@@ -45,16 +45,9 @@ public class UIEventsManager : NetworkBehaviour
     private Coroutine _cutInCoroutine;
     private bool _lastConnected = false;
 
-    private void Start()
+private void Start()
     {
-        ConfigureWebGLTransport();
         RefreshLobbyPanels();
-
-        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる
-        if (Application.platform == RuntimePlatform.WebGLPlayer)
-        {
-            ButtonConnect();
-        }
     }
 
     // 接続に失敗した(一度も繋がらないまま切断された)場合、その旨を表示する
@@ -78,18 +71,7 @@ public class UIEventsManager : NetworkBehaviour
 
     // WebGLでHTTPS配信されている場合はwss(暗号化WebSocket)を使う必要がある。
     // ブラウザはHTTPSページから非暗号化のws://接続を許可しないため。
-    private void ConfigureWebGLTransport()
-    {
-        if (Application.platform != RuntimePlatform.WebGLPlayer) return;
-        var transport = Mirror.Transport.active;
-        if (transport == null) return;
 
-        var wssField = transport.GetType().GetField("clientUseWss");
-        if (wssField == null) return;
-
-        bool useWss = Application.absoluteURL.StartsWith("https");
-        wssField.SetValue(transport, useWss);
-    }
 
     public void ButtonHost()
     {
