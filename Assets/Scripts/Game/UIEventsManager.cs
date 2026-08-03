@@ -183,7 +183,9 @@ private void Start()
         bool inGame = inRoom && localPlayer.gameManager != null && localPlayer.gameManager.inProgress;
         bool isHost = localPlayer != null && localPlayer.isRoomHost;
 
-        if (connectPanel != null) connectPanel.SetActive(!connected);
+        // WebGLは自動接続されるためHost/Connect/Server類のパネル自体が不要
+        bool isWebGL = Application.platform == RuntimePlatform.WebGLPlayer;
+        if (connectPanel != null) connectPanel.SetActive(!connected && !isWebGL);
         if (serverButtonGO != null) serverButtonGO.SetActive(IsServerModeAllowed());
         if (hostButtonGO != null) hostButtonGO.SetActive(IsHostingSupported());
 
