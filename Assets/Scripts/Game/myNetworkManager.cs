@@ -14,7 +14,7 @@ public class myNetworkManager : NetworkManager
     // 常時アクティブなこのクラス側で完結させる。
     private static bool _hasEverConnected = false;
 
-    private void Start()
+private void Start()
     {
         ConfigureWebGLTransport();
 
@@ -26,9 +26,14 @@ public class myNetworkManager : NetworkManager
             return;
         }
 
-        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる
+        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる。
+        // "Manager"(ロビーUI)は接続が確立するまで非アクティブでRefreshLobbyPanelsが動かないため、
+        // ConnectPanel(Host/Connect/Server)はここで直接隠しておく。
         if (Application.platform == RuntimePlatform.WebGLPlayer)
         {
+            var connectPanel = GameObject.Find("ConnectPanel");
+            if (connectPanel != null) connectPanel.SetActive(false);
+
             StartClient();
         }
     }
