@@ -14,6 +14,9 @@ public class myNetworkManager : NetworkManager
     // 常時アクティブなこのクラス側で完結させる。
     private static bool _hasEverConnected = false;
 
+    // WebGL版が自動接続する本番サーバーのアドレス(Caddy経由でwssを待ち受ける)
+    private const string ProductionServerAddress = "nine.freeddns.org";
+
 private void Start()
     {
         ConfigureWebGLTransport();
@@ -34,6 +37,7 @@ private void Start()
             var connectPanel = GameObject.Find("ConnectPanel");
             if (connectPanel != null) connectPanel.SetActive(false);
 
+            networkAddress = ProductionServerAddress;
             StartClient();
         }
     }
@@ -72,12 +76,13 @@ private void Start()
         base.OnClientConnect();
     }
 
-    public override void OnClientDisconnect()
+public override void OnClientDisconnect()
     {
         if (!_hasEverConnected)
         {
             // "Manager"(ロビーUI)は未接続時は非アクティブで見つからないため、
-            // 常に存在するStatusTextを直接操作して失敗を知らせる
+            // 常に存在するStatusTextを直接操作して失敗を知らせる。
+            // 接続先を手入力させるのはセキュリティ・UX上望ましくないため、ConnectPanelは再表示しない。
             var statusGo = GameObject.Find("StatusText");
             var tmp = statusGo != null ? statusGo.GetComponent<TMPro.TextMeshProUGUI>() : null;
             if (tmp != null) tmp.text = "Could not find a server to connect to.";
