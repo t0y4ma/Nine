@@ -321,9 +321,13 @@ private void Start()
             textRt.offsetMax = Vector2.zero;
             var tmp = textGo.AddComponent<TextMeshProUGUI>();
             tmp.text = roomId;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 12;
+            tmp.fontSizeMax = 20;
+            tmp.enableWordWrapping = false;
+            tmp.overflowMode = TextOverflowModes.Truncate;
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
-            tmp.fontSize = 20;
 
             string capturedId = roomId;
             btn.onClick.AddListener(() => { if (inputField != null) inputField.text = capturedId; });
@@ -428,7 +432,11 @@ private void Start()
                 labelRt.sizeDelta = new Vector2(300, 24);
                 labelRt.anchoredPosition = new Vector2(0, rowIndex * -80 + 45);
                 var labelTmp = labelGo.AddComponent<TextMeshProUGUI>();
-                labelTmp.fontSize = 18;
+                labelTmp.enableAutoSizing = true;
+                labelTmp.fontSizeMin = 10;
+                labelTmp.fontSizeMax = 18;
+                labelTmp.enableWordWrapping = false;
+                labelTmp.overflowMode = TextOverflowModes.Truncate;
                 labelTmp.alignment = TextAlignmentOptions.Left;
                 labelTmp.color = Color.white;
             }
@@ -509,8 +517,12 @@ private void Start()
             labelRt.sizeDelta = new Vector2(90, 20);
             labelRt.anchoredPosition = new Vector2(0, 60);
             var labelTmp = labelGo.AddComponent<TextMeshProUGUI>();
+            labelTmp.enableAutoSizing = true;
+            labelTmp.fontSizeMin = 9;
+            labelTmp.fontSizeMax = 16;
+            labelTmp.enableWordWrapping = false;
+            labelTmp.overflowMode = TextOverflowModes.Truncate;
             labelTmp.alignment = TextAlignmentOptions.Center;
-            labelTmp.fontSize = 16;
             labelTmp.color = Color.white;
 
             var cardGo = Instantiate(cardUI, slotGo.transform);
