@@ -197,9 +197,33 @@ public class GameManager : NetworkBehaviour
     // ラウンド勝敗判定
     // 現在のルール: そのラウンドで一番大きい数字を出した人がラウンド勝ち（同点は無効）。
     // 全ラウンド終了時に一番ラウンド勝ち数が多い人が総合優勝。
-    [Server]
+[Server]
     protected virtual void ResolveRound(List<int> playedCards)
     {
+        // 選択しなかったプレイヤーには、未使用のカードからランダムに1枚を自動選択させる
+        // (誰も選ばずtieで終わる、ということが起きないようにするため)
+        for (int i = 0; i < playedCards.Count; i++)
+        {
+            if (playedCards[i] != 0) continue;
+
+            var candidates = new List<int>();
+            for (int c = 0; c < CARDCOUNT; c++)
+            {
+                if (!used_Players[i * CARDCOUNT + c]) candidates.Add(c);
+            }
+            if (candidates.Count == 0) continue; // 全カード使用済み(基本起こらないはず)
+
+            int chosen = candidates[UnityEngine.Random.Range(0, candidates.Count)];
+            used_Players[i * CARDCOUNT + chosen] = true;
+            playedCards[i] = chosen + 1;
+
+            if (i < room.playerComponents.Count)
+            {
+                var p = room.playerComponents[i];
+                if (chosen < p.used.Count) p.used[chosen] = true;
+            }
+        }
+
         int best = -1;
         int winnerId = -1;
         bool tie = false;

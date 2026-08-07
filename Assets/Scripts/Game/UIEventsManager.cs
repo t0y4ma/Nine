@@ -424,8 +424,9 @@ private void Start()
                 var labelGo = new GameObject("PlayerLabel" + rowIndex);
                 labelGo.transform.SetParent(othersLabelsParent.transform, false);
                 var labelRt = labelGo.AddComponent<RectTransform>();
+                labelRt.pivot = new Vector2(0, 0.5f);
                 labelRt.sizeDelta = new Vector2(300, 24);
-                labelRt.anchoredPosition = new Vector2(-10, rowIndex * -80 + 45);
+                labelRt.anchoredPosition = new Vector2(0, rowIndex * -80 + 45);
                 var labelTmp = labelGo.AddComponent<TextMeshProUGUI>();
                 labelTmp.fontSize = 18;
                 labelTmp.alignment = TextAlignmentOptions.Left;
