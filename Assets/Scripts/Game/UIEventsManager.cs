@@ -45,7 +45,31 @@ public class UIEventsManager : NetworkBehaviour
     private Coroutine _cutInCoroutine;
     private bool _lastConnected = false;
 
-private void Start()
+    // 現在のCanvasの実効幅(デザイン単位)を取得する。カード等の間隔を画面幅に応じて動的に詰めるために使う。
+    private RectTransform _canvasRt;
+
+    // "Manager"と"Canvas"は親子関係にないため、GetComponentInParentでは取得できない。GameObject.Findで探す。
+    private float GetCanvasWidth()
+    {
+        if (_canvasRt == null)
+        {
+            var canvasGo = GameObject.Find("Canvas");
+            if (canvasGo != null) _canvasRt = canvasGo.GetComponent<RectTransform>();
+        }
+return _canvasRt != null ? _canvasRt.rect.width : 1920f;
+    }
+
+    private float GetCanvasHeight()
+    {
+        if (_canvasRt == null)
+        {
+            var canvasGo = GameObject.Find("Canvas");
+            if (canvasGo != null) _canvasRt = canvasGo.GetComponent<RectTransform>();
+        }
+        return _canvasRt != null ? _canvasRt.rect.height : 1080f;
+    }
+
+    private void Start()
     {
         RefreshLobbyPanels();
     }
@@ -342,16 +366,33 @@ private void Start()
         RefreshMyCardView(a, 5);
     }
 
-    [Client]
+[Client]
     public void RefreshMyCardView(List<bool> used, int cnt)
     {
+        float canvasWidth = GetCanvasWidth();
+        float maxRowWidth = canvasWidth * 0.92f;
+
+        // 1行に収めた場合の縮小率を試算し、小さくなりすぎる場合は複数行に折り返す
+        float cardSpacingCap = Mathf.Clamp(maxRowWidth / Mathf.Max(cnt, 1), 60f, 210f); // 画面幅に応じて上限自体を引き上げる
+        float singleRowSpacing = Mathf.Min(cardSpacingCap, maxRowWidth / Mathf.Max(cnt, 1));
+        float singleRowScale = singleRowSpacing / 120f;
+
+        int perRow = cnt;
+        if (singleRowScale < 0.55f && cnt > 5)
+        {
+            perRow = Mathf.CeilToInt(cnt / 2f);
+        }
+        int rows = Mathf.CeilToInt((float)cnt / perRow);
+
+        float spacing = Mathf.Min(cardSpacingCap, maxRowWidth / perRow);
+        float cardScale = Mathf.Clamp(spacing / 120f, 0.4f, 1.8f); // 画面が広い場合はカードも大きくする
+        float rowHeight = 145f * cardScale;
+
         if (cnt > myCardParent.transform.childCount)
         {
             for (int i = myCardParent.transform.childCount; i < cnt; i++)
             {
                 var card = Instantiate(cardUI, new Vector3(), Quaternion.identity, myCardParent.transform);
-                var rT = card.GetComponent<RectTransform>();
-                rT.anchoredPosition = new Vector3(i * 120 - used.Count * 60 + 30, -300, 0);
                 var numUI = card.GetComponent<NumberCardUI>();
                 numUI.Setup(i + 1);
                 int capturedIndex = i;
@@ -361,7 +402,19 @@ private void Start()
         }
         for (int i = 0; i < cnt; i++)
         {
-            var numUI = myCardParent.transform.GetChild(i).GetComponent<NumberCardUI>();
+            int row = i / perRow;
+            int rowStart = row * perRow;
+            int itemsInRow = Mathf.Min(perRow, cnt - rowStart);
+            int col = i - rowStart;
+
+            var child = myCardParent.transform.GetChild(i);
+            var rT = child.GetComponent<RectTransform>();
+            rT.localScale = new Vector3(cardScale, cardScale, cardScale);
+            float x = col * spacing - itemsInRow * spacing * 0.5f + spacing * 0.5f;
+            float y = -300f * cardScale + (rows - 1 - row) * rowHeight;
+            rT.anchoredPosition = new Vector3(x, y, 0);
+
+            var numUI = child.GetComponent<NumberCardUI>();
             numUI.SetUsed(used[i]);
             numUI.SetSelected(i == _selectedCardIndex);
         }
@@ -422,31 +475,49 @@ private void Start()
             var localPlayer = GetDebugOrLocalPlayer();
             var gm = localPlayer != null ? localPlayer.gameManager : null;
 
+            float othersSpacingForLabel = Mathf.Min(130f, Mathf.Max(150f, GetCanvasWidth() - 100f) / Mathf.Max(cnt, 1));
+            float labelRowHeight = Mathf.Max(45f, 80f * (othersSpacingForLabel / 55f));
+            // ラベルとカードの間隔も、カードスケールに比例させる(固定値だとカードが大きい時に重なるため)
+            float labelTopMargin = labelRowHeight * 0.6f;
             while (othersLabelsParent.transform.childCount < pcnt)
             {
                 int rowIndex = othersLabelsParent.transform.childCount;
                 var labelGo = new GameObject("PlayerLabel" + rowIndex);
                 labelGo.transform.SetParent(othersLabelsParent.transform, false);
                 var labelRt = labelGo.AddComponent<RectTransform>();
-                labelRt.pivot = new Vector2(0, 0.5f);
+                labelRt.pivot = new Vector2(0.5f, 0.5f);
                 labelRt.sizeDelta = new Vector2(300, 24);
-                labelRt.anchoredPosition = new Vector2(0, rowIndex * -80 + 45);
+                labelRt.anchoredPosition = new Vector2(0, rowIndex * -labelRowHeight + labelTopMargin);
                 var labelTmp = labelGo.AddComponent<TextMeshProUGUI>();
                 labelTmp.enableAutoSizing = true;
                 labelTmp.fontSizeMin = 10;
-                labelTmp.fontSizeMax = 18;
+                labelTmp.fontSizeMax = 40; // カードが大きくなった分、ラベルも読める大きさまで拡大できるようにする
                 labelTmp.enableWordWrapping = false;
                 labelTmp.overflowMode = TextOverflowModes.Truncate;
-                labelTmp.alignment = TextAlignmentOptions.Left;
+                labelTmp.alignment = TextAlignmentOptions.Center;
                 labelTmp.color = Color.white;
             }
+            int actualLocalPlayerId = NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1;
             for (int i = 0; i < pcnt; i++)
             {
-                var labelTmp = othersLabelsParent.transform.GetChild(i).GetComponent<TextMeshProUGUI>();
+                var labelChild = othersLabelsParent.transform.GetChild(i);
+                var labelChildRt = labelChild.GetComponent<RectTransform>();
+                labelChildRt.anchoredPosition = new Vector2(0, i * -labelRowHeight + labelTopMargin);
+                var labelTmp = labelChild.GetComponent<TextMeshProUGUI>();
                 int points = (gm != null && i < gm.roundWins.Count) ? gm.roundWins[i] : 0;
-                labelTmp.text = "Player " + i + "  -  " + points + " pt";
+                bool isMe = (i == actualLocalPlayerId);
+                labelTmp.text = "Player " + i + (isMe ? " (You)" : "") + "  -  " + points + " pt";
+                labelTmp.color = isMe ? new Color(1f, 0.85f, 0.25f, 1f) : Color.white;
+                labelTmp.fontStyle = isMe ? FontStyles.Bold : FontStyles.Normal;
             }
         }
+
+        float othersCanvasWidth = GetCanvasWidth();
+        float othersAvailableWidth = Mathf.Max(150f, othersCanvasWidth - 100f); // 左マージン60+右余白分を差し引く
+// 間隔の上限を固定値(55)にすると、画面が広くてもそれ以上大きくならなかったため、130まで引き上げる
+        float othersSpacing = Mathf.Min(130f, othersAvailableWidth / Mathf.Max(cnt, 1));
+        float othersScale = 0.5f * (othersSpacing / 55f);
+        float othersRowHeight = Mathf.Max(45f, 80f * othersScale / 0.5f);
 
         for (int i = 0; i < pcnt; i++)
         {
@@ -455,13 +526,13 @@ private void Start()
                 if (othersCardParent.transform.childCount <= i * cnt + j)
                 {
                     var card = Instantiate(cardUI, new Vector3(), Quaternion.identity, othersCardParent.transform);
-                    var rT = card.GetComponent<RectTransform>();
-                    rT.localScale = new Vector3(0.5f, 0.5f, 0.5f);
-                    rT.anchoredPosition = new Vector3(j * 55, i * -80, 0);
-
                     var numUI = card.GetComponent<NumberCardUI>();
                     numUI.Setup(j + 1);
                 }
+var rT = othersCardParent.transform.GetChild(i * cnt + j).GetComponent<RectTransform>();
+                rT.localScale = new Vector3(othersScale, othersScale, othersScale);
+                float centeredX = j * othersSpacing - (cnt - 1) * othersSpacing * 0.5f;
+                rT.anchoredPosition = new Vector3(centeredX, i * -othersRowHeight, 0);
             }
         }
         for (int i = 0; i < pcnt * cnt; i++)
@@ -501,6 +572,18 @@ private void Start()
             .OrderBy(p => p.playerId)
             .ToList();
 
+        // 画面幅に収まるようパネル自体の幅とスロット間隔を動的に決める
+float canvasWidthForResults = GetCanvasWidth();
+        // パネル幅・スロット間隔の上限を固定値(480/110)にすると、画面が広くてもそれ以上大きくならなかったため、
+        // 画面幅に応じて上限自体を引き上げる。
+float maxPanelWidth = canvasWidthForResults * 0.6f;
+        var panelRt = roundResultPanel.GetComponent<RectTransform>();
+        panelRt.sizeDelta = new Vector2(maxPanelWidth, panelRt.sizeDelta.y);
+
+        int slotCountForSpacing = Mathf.Max(players.Count, 1);
+        float resultSlotSpacing = Mathf.Min(220f, (maxPanelWidth - 20f) / slotCountForSpacing);
+        float resultSlotScale = Mathf.Clamp(resultSlotSpacing / 110f, 0.45f, 1.4f); // パネル高さの上限(220)を超えないよう安全な範囲に留める
+
         while (roundResultPanel.transform.childCount < players.Count)
         {
             int slotIndex = roundResultPanel.transform.childCount;
@@ -509,7 +592,6 @@ private void Start()
             slotGo.transform.SetParent(roundResultPanel.transform, false);
             var slotRt = slotGo.AddComponent<RectTransform>();
             slotRt.sizeDelta = new Vector2(90, 140);
-            slotRt.anchoredPosition = new Vector2(-140 + slotIndex * 110, 0);
 
             var labelGo = new GameObject("Label");
             labelGo.transform.SetParent(slotGo.transform, false);
@@ -519,7 +601,7 @@ private void Start()
             var labelTmp = labelGo.AddComponent<TextMeshProUGUI>();
             labelTmp.enableAutoSizing = true;
             labelTmp.fontSizeMin = 9;
-            labelTmp.fontSizeMax = 16;
+            labelTmp.fontSizeMax = 32; // スロットが大きくなった分、ラベルも読める大きさまで拡大できるようにする
             labelTmp.enableWordWrapping = false;
             labelTmp.overflowMode = TextOverflowModes.Truncate;
             labelTmp.alignment = TextAlignmentOptions.Center;
@@ -537,15 +619,21 @@ private void Start()
             var slot = roundResultPanel.transform.GetChild(i);
             slot.gameObject.SetActive(true);
 
+            var slotRtLive = slot.GetComponent<RectTransform>();
+            slotRtLive.localScale = new Vector3(resultSlotScale, resultSlotScale, resultSlotScale);
+            slotRtLive.anchoredPosition = new Vector2((i - (slotCountForSpacing - 1) * 0.5f) * resultSlotSpacing, 0);
+
+            bool isMeResult = (p.playerId == (NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1));
             var label = slot.Find("Label").GetComponent<TextMeshProUGUI>();
-            label.text = "Player " + p.playerId;
+            label.text = "Player " + p.playerId + (isMeResult ? " (You)" : "");
+            label.color = isMeResult ? new Color(1f, 0.85f, 0.25f, 1f) : Color.white;
 
             var cardGo = slot.GetChild(1).gameObject;
             var numUI = cardGo.GetComponent<NumberCardUI>();
+            cardGo.SetActive(true); // 未選択でも空欄プレースホルダーとして常に表示し、誰が出した/出していないか分かりやすくする
 
             if (p.isReadytoTurn)
             {
-                cardGo.SetActive(true);
                 numUI.SetupDisplay("?");
             }
             else
@@ -554,12 +642,11 @@ private void Start()
                 int revealed = (idx >= 0 && idx < gm.lastRevealedPicks.Count) ? gm.lastRevealedPicks[idx] : 0;
                 if (revealed > 0)
                 {
-                    cardGo.SetActive(true);
                     numUI.SetupDisplay(revealed.ToString());
                 }
                 else
                 {
-                    cardGo.SetActive(false);
+                    numUI.SetupDisplay("-"); // まだ確定していない(待機中)ことを示すプレースホルダー
                 }
             }
         }

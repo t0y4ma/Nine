@@ -19,6 +19,7 @@ public class GameManager : NetworkBehaviour
     private const float ROUND_TIME_SEND_INTERVAL = 0.1f;
 
     [SyncVar] public int CARDCOUNT = 9;
+    [SyncVar] public int ScoringMode = 0; // 0=ラウンド勝利で1pt、1=相手が出したカード数字の合計をpt
     [SyncVar(hook = nameof(OnInProgressChanged))] public bool inProgress;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int readyCount;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int totalPlayerCount;
@@ -27,6 +28,32 @@ public class GameManager : NetworkBehaviour
     public void DeleteMatch()
     {
         NetworkServer.Destroy(gameObject);
+    }
+
+// 設定変更(カード枚数・得点方式)。ゲーム開始前、ホストのみが呼び出せる想定。
+    [Server]
+    public void UpdateSettings(int newCardCount, int newScoringMode)
+    {
+        if (inProgress) return;
+        newCardCount = Mathf.Clamp(newCardCount, 3, 20);
+        newScoringMode = Mathf.Clamp(newScoringMode, 0, 1);
+
+        CARDCOUNT = newCardCount;
+        ScoringMode = newScoringMode;
+
+        // 既存プレイヤーの手札状態を新しいカード枚数に合わせて作り直す
+        used_Players.Clear();
+        int playerCount = room.playerComponents.Count;
+        for (int i = 0; i < playerCount; i++)
+        {
+            for (int c = 0; c < CARDCOUNT; c++) used_Players.Add(false);
+        }
+
+        foreach (var p in room.playerComponents)
+        {
+            p.used.Clear();
+            for (int c = 0; c < CARDCOUNT; c++) p.used.Add(false);
+        }
     }
 
     [Server]
@@ -197,7 +224,7 @@ public class GameManager : NetworkBehaviour
     // ラウンド勝敗判定
     // 現在のルール: そのラウンドで一番大きい数字を出した人がラウンド勝ち（同点は無効）。
     // 全ラウンド終了時に一番ラウンド勝ち数が多い人が総合優勝。
-[Server]
+    [Server]
     protected virtual void ResolveRound(List<int> playedCards)
     {
         // 選択しなかったプレイヤーには、未使用のカードからランダムに1枚を自動選択させる
@@ -239,7 +266,18 @@ public class GameManager : NetworkBehaviour
 
         if (!tie && winnerId >= 0)
         {
-            roundWins[winnerId] = roundWins[winnerId] + 1;
+            int pointsToAdd = 1;
+            if (ScoringMode == 1)
+            {
+                // 相手(勝者以外)が出したカードの数字の合計を得点にする
+                int sum = 0;
+                for (int i = 0; i < playedCards.Count; i++)
+                {
+                    if (i != winnerId) sum += playedCards[i];
+                }
+                pointsToAdd = Mathf.Max(1, sum); // 念のため最低1pt保証
+            }
+            roundWins[winnerId] = roundWins[winnerId] + pointsToAdd;
         }
 
         roundsPlayed++;
@@ -259,11 +297,16 @@ public class GameManager : NetworkBehaviour
         uiManager.ShowResult(message);
     }
 
-    [ClientRpc]
+[ClientRpc]
     private void RpcRevealBoard()
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         if (uiManager == null) return;
+
+        // 時間切れでランダムに選ばれたカードも含め、自分の手札ビューを更新する
+        var localPlayer = uiManager.GetDebugOrLocalPlayer();
+        if (localPlayer != null)
+            uiManager.RefreshMyCardView(localPlayer.used.ToList(), localPlayer.used.Count);
 
         uiManager.RefreshAllCardView(used_Players.ToList(), CARDCOUNT);
         uiManager.RefreshRoundResultPanel();

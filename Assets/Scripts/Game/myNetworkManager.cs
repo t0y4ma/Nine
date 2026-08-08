@@ -17,7 +17,7 @@ public class myNetworkManager : NetworkManager
     // WebGL版が自動接続する本番サーバーのアドレス(Caddy経由でwssを待ち受ける)
     private const string ProductionServerAddress = "nine.freeddns.org";
 
-private void Start()
+    private void Start()
     {
         ConfigureWebGLTransport();
 
@@ -76,7 +76,7 @@ private void Start()
         base.OnClientConnect();
     }
 
-public override void OnClientDisconnect()
+    public override void OnClientDisconnect()
     {
         if (!_hasEverConnected)
         {
