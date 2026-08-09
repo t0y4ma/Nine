@@ -76,10 +76,43 @@ public class ResponsiveCanvasScaler : MonoBehaviour
 
         float vGap = btnHeight + 8f;
 
-        if (portrait)
+if (portrait)
         {
             float clusterGap = 50f;
-            float topY = 130f;
+
+            // RoomListPanel(既存の部屋一覧)を一番上に配置し、その下にRoomCreate等を続ける。
+            // ここに組み込んでいなかったため、ConnectPanel(Host/Connectボタン)と重なって
+            // クリックできなくなっていた。
+            float roomListHeight = Mathf.Clamp(canvasHeight * 0.16f, 140f, 220f);
+
+// クラスタ全体(RoomListPanel〜BtnSettings)の合計高さを見積もり、画面の上端〜DebugPanelの
+            // 間で縦方向に中央寄せする。以前はRoomListPanelだけ座標系が異なっていたため中央寄せの
+            // 計算がズレてしまっていたが、座標系を統一したので正しく機能する。
+            float connectPanelHeightForCalc = vGap * 4f + 20f;
+            float totalClusterHeight = roomListHeight + clusterGap
+                + (btnHeight + vGap * 2f) + clusterGap
+                + connectPanelHeightForCalc + clusterGap
+                + btnHeight + (btnHeight + 12f);
+
+            const float topSafeMargin = 40f;
+            const float bottomSafeMargin = 170f; // DebugPanelとの最低クリアランス
+            float availableHeight = canvasHeight - topSafeMargin - bottomSafeMargin;
+            float roomListTopOffset = topSafeMargin + Mathf.Max(0f, (availableHeight - totalClusterHeight) * 0.5f);
+            // RoomListPanel以外の要素(RoomCreate等)はすべて中央アンカーのため、RoomListPanelも
+            // 中央アンカーに統一する。以前は上端アンカーのままだったため、2つの異なる座標系が
+            // 混在してズレが生じ、意図しない大きな空白ができる原因になっていた。
+            var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
+            float roomListCenterY = canvasHeight * 0.5f - roomListTopOffset - roomListHeight * 0.5f;
+            if (roomListRt != null)
+            {
+                roomListRt.anchorMin = new Vector2(0.5f, 0.5f);
+                roomListRt.anchorMax = new Vector2(0.5f, 0.5f);
+                roomListRt.pivot = new Vector2(0.5f, 0.5f);
+                roomListRt.anchoredPosition = new Vector2(0, roomListCenterY);
+                roomListRt.sizeDelta = new Vector2(btnWidth + 60f, roomListHeight);
+            }
+
+            float topY = roomListCenterY - roomListHeight * 0.5f - clusterGap - btnHeight * 0.5f;
 
             SetPos(canvasTf, "RoomCreate", new Vector2(0, topY));
             SetSize(canvasTf, "RoomCreate", btnSizePortrait);
@@ -102,17 +135,24 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             SetPos(canvasTf, "ConnectPanel/BtnServer", new Vector2(0, -vGap * 1.5f));
             SetSize(canvasTf, "ConnectPanel/BtnServer", btnSizePortrait);
 
-            float lobbyPanelHeight = vGap * 3f;
+            float lobbyPanelHeight = vGap * 3f + 36f;
             SetPos(canvasTf, "LobbyPanel", new Vector2(0, connectPanelCenterY));
             SetSize(canvasTf, "LobbyPanel", new Vector2(btnWidth + 60f, lobbyPanelHeight));
-            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(0, vGap * 0.5f));
+            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(0, vGap));
             SetSize(canvasTf, "LobbyPanel/BtnReady", btnSizePortrait);
-            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0, -vGap * 0.5f));
+            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0, 0));
             SetSize(canvasTf, "LobbyPanel/ReadyStatusText", btnSizePortrait);
+            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(0, -vGap));
+            SetSize(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(btnWidth, 30f));
 
             float lobbyPanelBottom = connectPanelCenterY - lobbyPanelHeight * 0.5f;
-            SetPos(canvasTf, "StartGame", new Vector2(0, lobbyPanelBottom - clusterGap - btnHeight * 0.5f));
+            float startGameY = lobbyPanelBottom - clusterGap - btnHeight * 0.5f;
+            SetPos(canvasTf, "StartGame", new Vector2(0, startGameY));
             SetSize(canvasTf, "StartGame", btnSizePortrait);
+
+            // BtnSettingsはStartGameのすぐ下に配置する(排他表示ではなく同時に見えるため、間隔を空ける)
+            SetPos(canvasTf, "BtnSettings", new Vector2(0, startGameY - btnHeight - 12f));
+            SetSize(canvasTf, "BtnSettings", btnSizePortrait);
         }
         else
         {
@@ -136,17 +176,36 @@ public class ResponsiveCanvasScaler : MonoBehaviour
 
             SetPos(canvasTf, "LobbyPanel", new Vector2(0, -140));
             SetSize(canvasTf, "LobbyPanel", new Vector2(560, 120));
-            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(-150, 0));
+            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(-180, 0));
             SetSize(canvasTf, "LobbyPanel/BtnReady", btnSizeLandscape);
-            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(150, 0));
+            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(60, 0));
             SetSize(canvasTf, "LobbyPanel/ReadyStatusText", btnSizeLandscape);
+            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(230, 0));
+            SetSize(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(150, 30));
 
-            SetPos(canvasTf, "StartGame", new Vector2(-200, 0));
+SetPos(canvasTf, "StartGame", new Vector2(-200, 0));
             SetSize(canvasTf, "StartGame", btnSizeLandscape);
+
+            SetPos(canvasTf, "BtnSettings", new Vector2(-200, -60));
+            SetSize(canvasTf, "BtnSettings", btnSizeLandscape);
+
+            // RoomListPanelは、横持ちでは横幅に余裕があるため左側に配置し、
+            // RoomCreate/ConnectPanelクラスタ(画面中央)と重ならないようにする。
+            float roomListWidth = Mathf.Clamp(canvasWidth * 0.2f, 260f, 400f);
+            float roomListHeight = 260f;
+            var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
+            if (roomListRt != null)
+            {
+                roomListRt.anchorMin = new Vector2(0.5f, 0.5f);
+                roomListRt.anchorMax = new Vector2(0.5f, 0.5f);
+                roomListRt.pivot = new Vector2(0.5f, 0.5f);
+                float roomListX = -(380f + 40f + roomListWidth * 0.5f); // ConnectPanel左端(-380)よりさらに左
+                roomListRt.anchoredPosition = new Vector2(roomListX, 0);
+                roomListRt.sizeDelta = new Vector2(roomListWidth, roomListHeight);
+            }
         }
 
 ApplyTopBars(canvasTf, canvasWidth);
-        ApplyCutIn(canvasTf, canvasWidth);
         ApplyOthersLayout(canvasTf, portrait, canvasWidth, canvasHeight);
     }
 
@@ -166,7 +225,7 @@ ApplyTopBars(canvasTf, canvasWidth);
         }
     }
 
-    private void ApplyCutIn(Transform canvasTf, float canvasWidth)
+private void ApplyCutIn(Transform canvasTf, float canvasWidth, float statusBottomFromTop, float availableGap)
     {
         var cutInText = canvasTf.Find("CutInPanel/CutInText")?.GetComponent<TMPro.TextMeshProUGUI>();
         if (cutInText != null)
@@ -176,7 +235,16 @@ ApplyTopBars(canvasTf, canvasWidth);
         var cutInPanelRt = canvasTf.Find("CutInPanel")?.GetComponent<RectTransform>();
         if (cutInPanelRt != null)
         {
-            cutInPanelRt.sizeDelta = new Vector2(Mathf.Min(canvasWidth * 0.85f, 900f), cutInPanelRt.sizeDelta.y);
+            // 位置が一度も設定されておらず固定のまま(中央)だったため、RoundResultPanel等と
+            // 重なることがあった。StatusTextのすぐ下、OthersCardParentより上の隙間に正確に収める。
+            cutInPanelRt.anchorMin = new Vector2(0.5f, 1f);
+            cutInPanelRt.anchorMax = new Vector2(0.5f, 1f);
+            cutInPanelRt.pivot = new Vector2(0.5f, 1f);
+            const float topMargin = 10f;
+            const float bottomSafety = 15f;
+            float cutInHeight = Mathf.Clamp(availableGap - topMargin - bottomSafety, 40f, 200f);
+            cutInPanelRt.sizeDelta = new Vector2(Mathf.Min(canvasWidth * 0.85f, 900f), cutInHeight);
+            cutInPanelRt.anchoredPosition = new Vector2(0, -(statusBottomFromTop + topMargin));
         }
     }
 
@@ -203,11 +271,17 @@ ApplyTopBars(canvasTf, canvasWidth);
         // OthersLabelsParentのラベルは、カードとの重なりを避けるためアンカー点よりやや上にせり出す
         // (labelTopMargin分)ため、その分もStatusTextとの間隔に含めておく。
         float othersAvailWidthEstForGap = Mathf.Max(150f, canvasWidth - 100f);
-        float othersSpacingEstForGap = Mathf.Min(130f, othersAvailWidthEstForGap / 9f);
+        float othersExpectedRowsForGap = portrait ? 4f : 2f;
+        float othersHeightCapForGap = (canvasHeight * 0.25f / othersExpectedRowsForGap) / 160f * 110f;
+        float othersSpacingEstForGap = Mathf.Min(Mathf.Min(130f, othersHeightCapForGap), othersAvailWidthEstForGap / 9f);
         float othersRowHeightEstForGap = Mathf.Max(45f, 80f * (othersSpacingEstForGap / 55f) / 0.5f * 0.5f);
         float labelTopMarginEst = othersRowHeightEstForGap * 0.6f;
         float othersGap = 40f + labelTopMarginEst;
         float othersY = -(statusBottomFromTop + othersGap);
+
+        // カットインはStatusTextとOthersCardParentの間の隙間に収める。実際に使える隙間(othersGap)を
+        // 正確に渡すことで、幅は足りていても高さが合わずはみ出す、ということがないようにする。
+        ApplyCutIn(canvasTf, canvasWidth, statusBottomFromTop, othersGap);
         foreach (var p in othersPaths)
         {
             var t = canvasTf.Find(p);
@@ -222,7 +296,9 @@ var rt = t.GetComponent<RectTransform>();
         // ここでも同じ考え方でスケールを見積もり、実際のカードサイズに見合った余白を確保する
         // (固定値だと、カードが大きくなった時に干渉してしまうため)。
         float othersAvailWidthEst = Mathf.Max(150f, canvasWidth - 100f);
-        float othersSpacingEst = Mathf.Min(130f, othersAvailWidthEst / 9f);
+        float othersExpectedRows = portrait ? 4f : 2f;
+        float othersHeightCap = (canvasHeight * 0.25f / othersExpectedRows) / 160f * 110f; // 高さ側からの上限
+        float othersSpacingEst = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailWidthEst / 9f);
         float othersScaleEst = 0.5f * (othersSpacingEst / 55f);
         float othersRowHeightEst = Mathf.Max(45f, 80f * othersScaleEst / 0.5f);
         // 横持ちは幅に余裕があり行数が少なくなる傾向があるため、想定行数を縦持ちより減らす
@@ -251,7 +327,9 @@ var rt = t.GetComponent<RectTransform>();
         // カード列がアンカー位置からどれだけ下に伸びるかが変わるため、それを踏まえた最低限の
         // クリアランスを確保する(でないと画面下端やDebugPanelの手前で見切れてしまう)。
         float cardMaxRowWidth = canvasWidth * 0.92f;
-        float cardSpacingCapEst = Mathf.Clamp(cardMaxRowWidth / 9f, 60f, 210f);
+        float cardWidthBasedCapEst = cardMaxRowWidth / 9f;
+        float cardHeightBasedCapEst = (canvasHeight * (portrait ? 0.32f : 0.27f)) / 3.45f;
+        float cardSpacingCapEst = Mathf.Clamp(Mathf.Min(cardWidthBasedCapEst, cardHeightBasedCapEst), 60f, 210f);
         float cardScaleEst = Mathf.Clamp(Mathf.Min(cardSpacingCapEst, cardMaxRowWidth / 9f) / 120f, 0.4f, 1.8f);
         float cardDownwardExtent = 345f * cardScaleEst; // アンカーから最下段カード下端までの見積もり距離
 
@@ -281,8 +359,8 @@ var myCardRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
             // (1) 画面下端を超えて見切れない(カード自体の下方向の広がり分のクリアランス)
             // (2) RoundResultPanelと重ならない
             float simpleLandscapeY = Mathf.Clamp(canvasHeight * 0.5f, 300f, 700f);
-            float landscapeMinY = cardDownwardExtent + 40f;
-            float landscapeUpperBound = resultBottomFromBottom - 150f;
+            float landscapeMinY = cardDownwardExtent + 20f;
+            float landscapeUpperBound = resultBottomFromBottom - 60f;
 
             if (landscapeMinY <= landscapeUpperBound)
             {
@@ -320,6 +398,17 @@ float confirmWidth = Mathf.Clamp(canvasWidth * 0.16f, 160f, 320f);
         }
 
         ApplyDebugPanelLayout(canvasTf, portrait, canvasWidth);
+        ApplySettingsPanelLayout(canvasTf, canvasWidth, canvasHeight);
+    }
+
+    private void ApplySettingsPanelLayout(Transform canvasTf, float canvasWidth, float canvasHeight)
+    {
+        var panelRt = canvasTf.Find("SettingsPanel")?.GetComponent<RectTransform>();
+        if (panelRt == null) return;
+
+        float panelWidth = Mathf.Min(600f, canvasWidth * 0.9f);
+        float panelHeight = Mathf.Min(540f, canvasHeight * 0.85f);
+        panelRt.sizeDelta = new Vector2(panelWidth, panelHeight);
     }
 
     private void ApplyDebugPanelLayout(Transform canvasTf, bool portrait, float canvasWidth)

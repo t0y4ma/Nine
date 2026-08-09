@@ -35,6 +35,11 @@ namespace Mirror.SimpleWeb
         public void Listen(int port)
         {
             listener = TcpListener.Create(port);
+            // Unity Editorでは、Play Mode停止時にリスニングソケットが完全にはクローズされず、
+            // OSレベルで残ってしまうことがある(Unity/Mirrorの既知の問題)。
+            // SO_REUSEADDRを設定しておくことで、たとえ古いソケットが残っていても
+            // 新しいバインドが「アドレス使用中」で失敗しないようにする。
+            listener.Server.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket, System.Net.Sockets.SocketOptionName.ReuseAddress, true);
             listener.Start();
 
             Log.Verbose("[SWT-WebSocketServer]: Server Started on {0}", port);

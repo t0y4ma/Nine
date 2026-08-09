@@ -72,6 +72,110 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     private void Start()
     {
         RefreshLobbyPanels();
+        SetupSettingsUI();
+    }
+
+    // --- 設定画面(カード枚数・得点方式) ---
+    private int _pendingScoringMode = 0;
+
+    private Transform FindSettingsPanel()
+    {
+        var canvas = GameObject.Find("Canvas");
+        return canvas != null ? canvas.transform.Find("SettingsPanel") : null;
+    }
+
+    private void SetupSettingsUI()
+    {
+        var canvas = GameObject.Find("Canvas");
+        if (canvas == null) return;
+
+        var btnSettings = canvas.transform.Find("BtnSettings")?.GetComponent<UnityEngine.UI.Button>();
+        if (btnSettings != null) { btnSettings.onClick.RemoveAllListeners(); btnSettings.onClick.AddListener(ButtonOpenSettings); }
+
+        var panel = FindSettingsPanel();
+        if (panel == null) return;
+
+        var btnApply = panel.Find("BtnApplySettings")?.GetComponent<UnityEngine.UI.Button>();
+        if (btnApply != null) { btnApply.onClick.RemoveAllListeners(); btnApply.onClick.AddListener(ButtonApplySettings); }
+
+        var btnClose = panel.Find("BtnCloseSettings")?.GetComponent<UnityEngine.UI.Button>();
+        if (btnClose != null) { btnClose.onClick.RemoveAllListeners(); btnClose.onClick.AddListener(ButtonCloseSettings); }
+
+        var btnFixed = panel.Find("BtnScoringFixed")?.GetComponent<UnityEngine.UI.Button>();
+        if (btnFixed != null) { btnFixed.onClick.RemoveAllListeners(); btnFixed.onClick.AddListener(() => SelectScoringMode(0)); }
+
+        var btnSum = panel.Find("BtnScoringSum")?.GetComponent<UnityEngine.UI.Button>();
+        if (btnSum != null) { btnSum.onClick.RemoveAllListeners(); btnSum.onClick.AddListener(() => SelectScoringMode(1)); }
+    }
+
+    public void ButtonOpenSettings()
+    {
+        var panel = FindSettingsPanel();
+        if (panel == null) return;
+
+        var localPlayer = GetDebugOrLocalPlayer();
+        var gm = localPlayer != null ? localPlayer.gameManager : null;
+
+        var cardCountInput = panel.Find("CardCountInput")?.GetComponent<TMP_InputField>();
+        if (cardCountInput != null) cardCountInput.text = (gm != null ? gm.CARDCOUNT : 9).ToString();
+
+        var maxPlayersInputOpen = panel.Find("MaxPlayersInput")?.GetComponent<TMP_InputField>();
+        if (maxPlayersInputOpen != null) maxPlayersInputOpen.text = (gm != null ? gm.MaxPlayers : 8).ToString();
+
+        _pendingScoringMode = gm != null ? gm.ScoringMode : 0;
+        RefreshScoringButtonHighlight(panel);
+
+        panel.gameObject.SetActive(true);
+    }
+
+    public void ButtonCloseSettings()
+    {
+        var panel = FindSettingsPanel();
+        if (panel != null) panel.gameObject.SetActive(false);
+    }
+
+    private void SelectScoringMode(int mode)
+    {
+        _pendingScoringMode = mode;
+        var panel = FindSettingsPanel();
+        if (panel != null) RefreshScoringButtonHighlight(panel);
+    }
+
+    private void RefreshScoringButtonHighlight(Transform panel)
+    {
+        var btnFixedImg = panel.Find("BtnScoringFixed")?.GetComponent<UnityEngine.UI.Image>();
+        var btnSumImg = panel.Find("BtnScoringSum")?.GetComponent<UnityEngine.UI.Image>();
+        Color selectedColor = new Color(0.29f, 0.72f, 0.56f, 1f);
+        Color unselectedColor = new Color(0.35f, 0.38f, 0.45f, 1f);
+        if (btnFixedImg != null) btnFixedImg.color = (_pendingScoringMode == 0) ? selectedColor : unselectedColor;
+        if (btnSumImg != null) btnSumImg.color = (_pendingScoringMode == 1) ? selectedColor : unselectedColor;
+    }
+
+    public void ButtonApplySettings()
+    {
+        var panel = FindSettingsPanel();
+        if (panel == null) return;
+
+        var cardCountInput = panel.Find("CardCountInput")?.GetComponent<TMP_InputField>();
+        int cardCount = 9;
+        if (cardCountInput != null && !string.IsNullOrEmpty(cardCountInput.text))
+        {
+            int.TryParse(cardCountInput.text, out cardCount);
+        }
+        cardCount = Mathf.Clamp(cardCount, 3, 20);
+
+        var maxPlayersInput = panel.Find("MaxPlayersInput")?.GetComponent<TMP_InputField>();
+        int maxPlayers = 8;
+        if (maxPlayersInput != null && !string.IsNullOrEmpty(maxPlayersInput.text))
+        {
+            int.TryParse(maxPlayersInput.text, out maxPlayers);
+        }
+        maxPlayers = Mathf.Clamp(maxPlayers, 2, 20);
+
+        string roomId = inputField != null ? inputField.text : "";
+        roomManager.CmdUpdateSettings(roomId, cardCount, _pendingScoringMode, maxPlayers, connectionToClient);
+
+        panel.gameObject.SetActive(false);
     }
 
     // 接続に失敗した(一度も繋がらないまま切断された)場合、その旨を表示する
@@ -235,10 +339,18 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             if (cutInPanel != null) cutInPanel.SetActive(false);
         }
 
-        if (startGameButton != null)
+if (startGameButton != null)
         {
             bool showStart = inRoom && !inGame && isHost;
             startGameButton.gameObject.SetActive(showStart);
+        }
+
+        var btnSettingsGO = GameObject.Find("Canvas")?.transform.Find("BtnSettings")?.gameObject;
+        if (btnSettingsGO != null) btnSettingsGO.SetActive(inRoom && !inGame && isHost);
+        if (!inRoom || inGame)
+        {
+            var settingsPanel = FindSettingsPanel();
+            if (settingsPanel != null) settingsPanel.gameObject.SetActive(false);
         }
 
         // ロビー内であれば、SyncVarの現在値を直接読んで即座に反映する(初回同期ではフックが発火しないため)
@@ -266,6 +378,17 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     {
         if (readyStatusText != null) readyStatusText.text = "Ready: " + readyCount + " / " + totalCount;
         if (startGameButton != null) startGameButton.interactable = (totalCount >= 2 && readyCount == totalCount);
+
+        // 現在人数/参加上限をロビーに表示する
+        var localPlayer = NetworkClient.connection?.identity?.GetComponent<Player>();
+        var gm = localPlayer != null ? localPlayer.gameManager : null;
+        var canvas = GameObject.Find("Canvas");
+        var playerCountText = canvas != null ? canvas.transform.Find("LobbyPanel/PlayerCountText")?.GetComponent<TMP_Text>() : null;
+        if (playerCountText != null)
+        {
+            int max = gm != null ? gm.MaxPlayers : 8;
+            playerCountText.text = "Players: " + totalCount + " / " + max;
+        }
     }
 
     public void ButtonCreateRoom()
@@ -370,15 +493,21 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     public void RefreshMyCardView(List<bool> used, int cnt)
     {
         float canvasWidth = GetCanvasWidth();
+        float canvasHeightForCards = GetCanvasHeight();
         float maxRowWidth = canvasWidth * 0.92f;
 
-        // 1行に収めた場合の縮小率を試算し、小さくなりすぎる場合は複数行に折り返す
-        float cardSpacingCap = Mathf.Clamp(maxRowWidth / Mathf.Max(cnt, 1), 60f, 210f); // 画面幅に応じて上限自体を引き上げる
+        // 1行に収めた場合の縮小率を試算し、小さくなりすぎる場合は複数行に折り返す。
+        // 間隔の上限は幅だけでなく高さからも制限する(横長画面で幅基準のみだとカードが
+        // 大きくなりすぎ、縦方向の余白が確保できなくなるため)。
+        float widthBasedCap = maxRowWidth / Mathf.Max(cnt, 1);
+        bool cardsIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
+        float heightBasedCap = (canvasHeightForCards * (cardsIsPortrait ? 0.32f : 0.27f)) / 3.45f; // 345*cardScale <= 高さの一定割合となるよう逆算(ResponsiveCanvasScalerの見積もりと一致させる)
+        float cardSpacingCap = Mathf.Clamp(Mathf.Min(widthBasedCap, heightBasedCap), 60f, 210f);
         float singleRowSpacing = Mathf.Min(cardSpacingCap, maxRowWidth / Mathf.Max(cnt, 1));
         float singleRowScale = singleRowSpacing / 120f;
 
         int perRow = cnt;
-        if (singleRowScale < 0.55f && cnt > 5)
+        if (singleRowScale < 0.75f && cnt > 5)
         {
             perRow = Mathf.CeilToInt(cnt / 2f);
         }
@@ -407,16 +536,23 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             int itemsInRow = Mathf.Min(perRow, cnt - rowStart);
             int col = i - rowStart;
 
-            var child = myCardParent.transform.GetChild(i);
+var child = myCardParent.transform.GetChild(i);
+            child.gameObject.SetActive(true); // 以前に枚数が減った際に非表示化されたカードを再度有効化する
             var rT = child.GetComponent<RectTransform>();
             rT.localScale = new Vector3(cardScale, cardScale, cardScale);
             float x = col * spacing - itemsInRow * spacing * 0.5f + spacing * 0.5f;
             float y = -300f * cardScale + (rows - 1 - row) * rowHeight;
             rT.anchoredPosition = new Vector3(x, y, 0);
 
-            var numUI = child.GetComponent<NumberCardUI>();
+var numUI = child.GetComponent<NumberCardUI>();
             numUI.SetUsed(used[i]);
             numUI.SetSelected(i == _selectedCardIndex);
+        }
+
+        // カード枚数が(以前の部屋等より)減った場合、余分な古いカードが残ったままにならないよう非表示にする
+        for (int i = cnt; i < myCardParent.transform.childCount; i++)
+        {
+            myCardParent.transform.GetChild(i).gameObject.SetActive(false);
         }
     }
 
@@ -513,9 +649,14 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         }
 
         float othersCanvasWidth = GetCanvasWidth();
+        float othersCanvasHeight = GetCanvasHeight();
         float othersAvailableWidth = Mathf.Max(150f, othersCanvasWidth - 100f); // 左マージン60+右余白分を差し引く
-// 間隔の上限を固定値(55)にすると、画面が広くてもそれ以上大きくならなかったため、130まで引き上げる
-        float othersSpacing = Mathf.Min(130f, othersAvailableWidth / Mathf.Max(cnt, 1));
+        // 間隔の上限は幅だけでなく高さからも制限する(横長画面で幅基準のみだと大きくなりすぎるため)。
+        // ResponsiveCanvasScaler側の見積もり計算と必ず一致させること。
+        bool othersIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
+        float othersExpectedRows = othersIsPortrait ? 4f : 2f;
+        float othersHeightCap = (othersCanvasHeight * 0.25f / othersExpectedRows) / 160f * 110f;
+        float othersSpacing = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailableWidth / Mathf.Max(cnt, 1));
         float othersScale = 0.5f * (othersSpacing / 55f);
         float othersRowHeight = Mathf.Max(45f, 80f * othersScale / 0.5f);
 
@@ -523,23 +664,31 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         {
             for (int j = 0; j < cnt; j++)
             {
-                if (othersCardParent.transform.childCount <= i * cnt + j)
+if (othersCardParent.transform.childCount <= i * cnt + j)
                 {
                     var card = Instantiate(cardUI, new Vector3(), Quaternion.identity, othersCardParent.transform);
                     var numUI = card.GetComponent<NumberCardUI>();
                     numUI.Setup(j + 1);
                 }
-var rT = othersCardParent.transform.GetChild(i * cnt + j).GetComponent<RectTransform>();
+                var othersChild = othersCardParent.transform.GetChild(i * cnt + j);
+                othersChild.gameObject.SetActive(true); // 以前に枚数が減った際に非表示化されたカードを再度有効化する
+                var rT = othersChild.GetComponent<RectTransform>();
                 rT.localScale = new Vector3(othersScale, othersScale, othersScale);
                 float centeredX = j * othersSpacing - (cnt - 1) * othersSpacing * 0.5f;
                 rT.anchoredPosition = new Vector3(centeredX, i * -othersRowHeight, 0);
             }
         }
-        for (int i = 0; i < pcnt * cnt; i++)
+for (int i = 0; i < pcnt * cnt; i++)
         {
             int playerIndex = i / cnt;
             int cardIndex = i % cnt;
             othersCardParent.transform.GetChild(playerIndex * cnt + cardIndex).GetComponent<NumberCardUI>().SetUsed(used_all[i]);
+        }
+
+        // カード枚数(pcnt*cnt)が以前より減った場合、余分な古いカードが残ったままにならないよう非表示にする
+        for (int i = pcnt * cnt; i < othersCardParent.transform.childCount; i++)
+        {
+            othersCardParent.transform.GetChild(i).gameObject.SetActive(false);
         }
     }
 

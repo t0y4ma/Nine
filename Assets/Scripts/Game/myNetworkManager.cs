@@ -90,9 +90,12 @@ public class myNetworkManager : NetworkManager
         base.OnClientDisconnect();
     }
 
-    public override void OnServerDisconnect(NetworkConnectionToClient conn)
+public override void OnServerDisconnect(NetworkConnectionToClient conn)
     {
-        var playerCon = conn.identity.GetComponent<Player>();
+        // 正常なゲームプレイ中の切断だけでなく、サーバー自体のシャットダウン処理
+        // (Editor停止時のServerStop等)でも呼ばれるため、identityがまだ無い/既に無い
+        // ケースがあり得る。nullチェックを入れておく。
+        var playerCon = conn.identity != null ? conn.identity.GetComponent<Player>() : null;
         if (playerCon != null)
         {
             var room = playerCon.room;

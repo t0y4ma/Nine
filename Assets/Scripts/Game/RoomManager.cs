@@ -72,13 +72,13 @@ public class RoomManager : NetworkBehaviour
     }
 
 [Command(requiresAuthority = false)]
-    public void CmdUpdateSettings(string roomId, int cardCount, int scoringMode, NetworkConnectionToClient sender = null)
+    public void CmdUpdateSettings(string roomId, int cardCount, int scoringMode, int maxPlayers, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.TryGetValue(roomId, out var info)) return;
         if (sender != info.room.hostConnection) return; // ホストのみ変更可能
         if (info.room.gameManager.inProgress) return; // ゲーム中は変更不可
 
-        info.room.gameManager.UpdateSettings(cardCount, scoringMode);
+        info.room.gameManager.UpdateSettings(cardCount, scoringMode, maxPlayers);
     }
 
     [ClientCallback]

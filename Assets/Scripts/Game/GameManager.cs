@@ -20,6 +20,7 @@ public class GameManager : NetworkBehaviour
 
     [SyncVar] public int CARDCOUNT = 9;
     [SyncVar] public int ScoringMode = 0; // 0=ラウンド勝利で1pt、1=相手が出したカード数字の合計をpt
+    [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int MaxPlayers = 8; // 部屋の参加人数上限
     [SyncVar(hook = nameof(OnInProgressChanged))] public bool inProgress;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int readyCount;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int totalPlayerCount;
@@ -32,14 +33,18 @@ public class GameManager : NetworkBehaviour
 
 // 設定変更(カード枚数・得点方式)。ゲーム開始前、ホストのみが呼び出せる想定。
     [Server]
-    public void UpdateSettings(int newCardCount, int newScoringMode)
+    public void UpdateSettings(int newCardCount, int newScoringMode, int newMaxPlayers)
     {
         if (inProgress) return;
         newCardCount = Mathf.Clamp(newCardCount, 3, 20);
         newScoringMode = Mathf.Clamp(newScoringMode, 0, 1);
+        // 上限は、既に参加している人数を下回らないようにする(既存プレイヤーが弾き出されないため)
+        int currentPlayerCount = room != null ? room.playerComponents.Count : 0;
+        newMaxPlayers = Mathf.Clamp(newMaxPlayers, Mathf.Max(2, currentPlayerCount), 20);
 
         CARDCOUNT = newCardCount;
         ScoringMode = newScoringMode;
+        MaxPlayers = newMaxPlayers;
 
         // 既存プレイヤーの手札状態を新しいカード枚数に合わせて作り直す
         used_Players.Clear();

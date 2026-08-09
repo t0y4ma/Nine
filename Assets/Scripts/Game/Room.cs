@@ -84,6 +84,7 @@ public class Room
     {
         if (this.password != password) return;
         if (gameManager.inProgress) return;
+        if (playerComponents.Count >= gameManager.MaxPlayers) return; // 参加人数上限に達している
 
         AddPlayer(conn);
     }

@@ -121,6 +121,31 @@ namespace Mirror.SimpleWeb
             Log.minLogLevel = minimumLogLevel;
         }
 
+        // Editorの「Play Mode停止」やアプリ終了時に、確実にサーバー/クライアントの
+        // ソケットを閉じるためのフック。これまでこの2つが実装されておらず、
+        // リスニングソケットがOSレベルで残ってしまう原因の一つになっていた。
+        void OnDestroy()
+        {
+            ShutdownAll();
+        }
+
+        void OnApplicationQuit()
+        {
+            ShutdownAll();
+        }
+
+        void ShutdownAll()
+        {
+            if (ServerActive())
+            {
+                ServerStop();
+            }
+            if (ClientConnected())
+            {
+                ClientDisconnect();
+            }
+        }
+
         public override string ToString() => $"SWT [{port}]";
 
         void OnValidate()
