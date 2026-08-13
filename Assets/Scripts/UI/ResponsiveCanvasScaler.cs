@@ -19,6 +19,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
     private int _lastHeight = -1;
 
     public static bool IsPortraitMode { get; private set; }
+    // 縦方向の予算が窮屈な画面で、カード等のサイズをどれだけ圧縮したかをUIEventsManager側と共有する。
+    // これが無いと、レイアウト側は圧縮した前提で余白を計算しているのに、実際のカード描画側は
+    // 圧縮を知らず元のサイズのまま描画してしまい、再び重なりが発生する。
+    public static float VerticalCompressionScale { get; private set; } = 1f;
 
     private void Awake()
     {
@@ -90,7 +94,7 @@ if (portrait)
             // 計算がズレてしまっていたが、座標系を統一したので正しく機能する。
             float connectPanelHeightForCalc = vGap * 4f + 20f;
             float totalClusterHeight = roomListHeight + clusterGap
-                + (btnHeight + vGap * 2f) + clusterGap
+                + (btnHeight + vGap * 3f) + clusterGap
                 + connectPanelHeightForCalc + clusterGap
                 + btnHeight + (btnHeight + 12f);
 
@@ -120,7 +124,9 @@ if (portrait)
             SetSize(canvasTf, "RoomJoin", btnSizePortrait);
             SetPos(canvasTf, "RoomId", new Vector2(0, topY - vGap * 2f));
             SetSize(canvasTf, "RoomId", btnSizePortrait);
-            float roomClusterBottom = topY - vGap * 2f - btnHeight * 0.5f;
+            SetPos(canvasTf, "RoomPassword", new Vector2(0, topY - vGap * 3f));
+            SetSize(canvasTf, "RoomPassword", btnSizePortrait);
+            float roomClusterBottom = topY - vGap * 3f - btnHeight * 0.5f;
 
             float connectPanelHeight = vGap * 4f + 20f;
             float connectPanelCenterY = roomClusterBottom - clusterGap - connectPanelHeight * 0.5f;
@@ -173,6 +179,8 @@ if (portrait)
             SetSize(canvasTf, "RoomJoin", btnSizeLandscape);
             SetPos(canvasTf, "RoomId", new Vector2(200, 0));
             SetSize(canvasTf, "RoomId", btnSizeLandscape);
+            SetPos(canvasTf, "RoomPassword", new Vector2(200, -50));
+            SetSize(canvasTf, "RoomPassword", btnSizeLandscape);
 
             SetPos(canvasTf, "LobbyPanel", new Vector2(0, -140));
             SetSize(canvasTf, "LobbyPanel", new Vector2(560, 120));
@@ -250,13 +258,74 @@ private void ApplyCutIn(Transform canvasTf, float canvasWidth, float statusBotto
 
     private void ApplyOthersLayout(Transform canvasTf, bool portrait, float canvasWidth, float canvasHeight)
     {
-        // 各要素の位置は、上から順に「前の要素の下端」を基準に連鎖的に計算する。
-        // 独立した固定割合の式同士だと、画面サイズによっては互いに重なってしまうため、
-        // 常に前の要素との間隔を保証できるこの方式にする。
+        // ==== 縦方向の「予算制」レイアウト ====
+        // 干渉しうる全要素(StatusText / OthersCardParent / RoundResultPanel / MyCardParent /
+        // Confirmボタン / DebugPanelとの余白)の「理想サイズ」をまず個別に計算し、その合計を
+        // 画面の高さと比較する。画面が狭くて理想サイズの合計が収まらない場合は、全要素を
+        // 同じ比率で一括圧縮することで、どんな高さでも必ず重ならずに収まることを保証する。
+        // (個々の要素を場当たり的に調整すると、別の解像度で新たな重なりを生み続けてしまうため)
 
-// 1. StatusText(タイマーバーのすぐ下)
-        float statusHeight = Mathf.Clamp(canvasHeight * 0.028f, 44f, 80f);
         float statusTopOffset = portrait ? 115f : Mathf.Clamp(canvasHeight * 0.12f, 90f, 160f);
+        float statusHeight = Mathf.Clamp(canvasHeight * 0.028f, 44f, 80f);
+
+        float othersAvailWidthEst = Mathf.Max(150f, canvasWidth - 100f);
+        float othersExpectedRows = portrait ? 4f : 2f;
+        float othersHeightCap = (canvasHeight * (portrait ? 0.25f : 0.18f) / othersExpectedRows) / 160f * 110f;
+        float othersSpacingEst = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailWidthEst / 9f);
+        float othersScaleEst = 0.5f * (othersSpacingEst / 55f);
+        float othersRowHeightEst = Mathf.Max(45f, 80f * othersScaleEst / 0.5f);
+        float labelTopMarginEst = othersRowHeightEst * 0.6f;
+        float othersGap = 40f + labelTopMarginEst;
+        float othersReservedHeight = othersRowHeightEst * othersExpectedRows * 1.3f + (portrait ? 60f : 30f); // 実測との誤差を吸収する安全係数
+
+        float resultGap = 30f;
+        float resultPanelHeight = Mathf.Clamp(canvasHeight * (portrait ? 0.16f : 0.2f), portrait ? 160f : 110f, 260f);
+
+        float cardMaxRowWidth = canvasWidth * 0.92f;
+        float cardWidthBasedCapEst = cardMaxRowWidth / 9f;
+        float cardHeightBasedCapEst = (canvasHeight * (portrait ? 0.32f : 0.27f)) / 3.45f;
+        float cardSpacingCapEst = Mathf.Clamp(Mathf.Min(cardWidthBasedCapEst, cardHeightBasedCapEst), 60f, 210f);
+        float cardScaleEst = Mathf.Clamp(Mathf.Min(cardSpacingCapEst, cardMaxRowWidth / 9f) / 120f, 0.4f, 1.8f);
+        float cardDownwardExtent = 345f * cardScaleEst; // アンカーから最下段カード下端までの見積もり距離
+
+        float resultToCardGap = portrait ? 100f : 80f; // 結果パネル下端とMyCardParentアンカーの間の最低隙間
+        float bottomClearance = portrait ? 170f : 130f; // カード下端からDebugPanel等までの最低隙間
+
+        float totalIdeal = statusTopOffset + statusHeight + othersGap + othersReservedHeight
+            + resultGap + resultPanelHeight + resultToCardGap + cardDownwardExtent + bottomClearance;
+
+        float availableHeight = canvasHeight - 20f; // 上下にわずかな余白を残す
+        float compressionScale = Mathf.Min(1f, availableHeight / Mathf.Max(1f, totalIdeal));
+        VerticalCompressionScale = compressionScale;
+
+        if (compressionScale < 1f)
+        {
+            // 画面が狭く、理想サイズのままでは収まらない -> 全要素を同じ比率で圧縮する。
+            // StatusTextの高さと結果パネルの高さだけは、可読性のため下限を設けておく。
+            // statusTopOffsetは、画面上部のRoundTimerBarPanel(固定で画面上端から86ユニットの位置に
+            // 配置されている)と重ならないよう、圧縮してもその下限を下回らないようにする。
+            statusTopOffset = Mathf.Max(statusTopOffset * compressionScale, 105f); // RoundTimerBarPanel(86) + StatusText/Bgの上方向はみ出し分(15)+余裕
+            statusHeight = Mathf.Max(statusHeight * compressionScale, 32f);
+            othersGap *= compressionScale;
+            othersReservedHeight *= compressionScale;
+            resultGap *= compressionScale;
+            resultPanelHeight = Mathf.Max(resultPanelHeight * compressionScale, 90f);
+            resultToCardGap *= compressionScale;
+            cardDownwardExtent *= compressionScale;
+            bottomClearance *= compressionScale;
+        }
+        else
+        {
+            // 逆に画面が十分広く余白がある場合は、その余白を各隙間に均等に配分し、
+            // 上部に要素が偏って下部に不自然な空白ができるのを防ぐ。
+            float slack = availableHeight - totalIdeal;
+            float extraPerGap = slack / 3f;
+            othersGap += extraPerGap;
+            resultGap += extraPerGap;
+            resultToCardGap += extraPerGap;
+        }
+
+        // ==== 圧縮/再配分後の値で、上から順に連鎖配置する ====
         float statusBottomFromTop = statusTopOffset + statusHeight;
 
         var statusRt = canvasTf.Find("StatusText")?.GetComponent<RectTransform>();
@@ -266,124 +335,61 @@ private void ApplyCutIn(Transform canvasTf, float canvasWidth, float statusBotto
             statusRt.anchoredPosition = new Vector2(0, -(statusTopOffset + statusHeight * 0.5f));
         }
 
-        // 2. OthersCardParent / OthersLabelsParent(StatusTextのすぐ下)
         string[] othersPaths = { "OthersCardParent", "OthersLabelsParent" };
-        // OthersLabelsParentのラベルは、カードとの重なりを避けるためアンカー点よりやや上にせり出す
-        // (labelTopMargin分)ため、その分もStatusTextとの間隔に含めておく。
-        float othersAvailWidthEstForGap = Mathf.Max(150f, canvasWidth - 100f);
-        float othersExpectedRowsForGap = portrait ? 4f : 2f;
-        float othersHeightCapForGap = (canvasHeight * 0.25f / othersExpectedRowsForGap) / 160f * 110f;
-        float othersSpacingEstForGap = Mathf.Min(Mathf.Min(130f, othersHeightCapForGap), othersAvailWidthEstForGap / 9f);
-        float othersRowHeightEstForGap = Mathf.Max(45f, 80f * (othersSpacingEstForGap / 55f) / 0.5f * 0.5f);
-        float labelTopMarginEst = othersRowHeightEstForGap * 0.6f;
-        float othersGap = 40f + labelTopMarginEst;
         float othersY = -(statusBottomFromTop + othersGap);
-
-        // カットインはStatusTextとOthersCardParentの間の隙間に収める。実際に使える隙間(othersGap)を
-        // 正確に渡すことで、幅は足りていても高さが合わずはみ出す、ということがないようにする。
         ApplyCutIn(canvasTf, canvasWidth, statusBottomFromTop, othersGap);
         foreach (var p in othersPaths)
         {
             var t = canvasTf.Find(p);
             if (t == null) continue;
-var rt = t.GetComponent<RectTransform>();
+            var rt = t.GetComponent<RectTransform>();
             rt.anchorMin = new Vector2(0.5f, 1f);
             rt.anchorMax = new Vector2(0.5f, 1f);
             rt.pivot = new Vector2(0.5f, 1f); // 上端pivotにし、アンカー点より上にはみ出さないようにする
             rt.anchoredPosition = new Vector2(0, othersY);
         }
-// OthersCardParent自体のカードスケールはUIEventsManager側で画面幅から動的に計算されるため、
-        // ここでも同じ考え方でスケールを見積もり、実際のカードサイズに見合った余白を確保する
-        // (固定値だと、カードが大きくなった時に干渉してしまうため)。
-        float othersAvailWidthEst = Mathf.Max(150f, canvasWidth - 100f);
-        float othersExpectedRows = portrait ? 4f : 2f;
-        float othersHeightCap = (canvasHeight * 0.25f / othersExpectedRows) / 160f * 110f; // 高さ側からの上限
-        float othersSpacingEst = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailWidthEst / 9f);
-        float othersScaleEst = 0.5f * (othersSpacingEst / 55f);
-        float othersRowHeightEst = Mathf.Max(45f, 80f * othersScaleEst / 0.5f);
-        // 横持ちは幅に余裕があり行数が少なくなる傾向があるため、想定行数を縦持ちより減らす
-        // (縦持ちと同じ想定のままだと、横持ちの限られた高さの中で計算が破綻してしまう)
-        float othersReservedHeight = othersRowHeightEst * (portrait ? 4f : 2f) + 60f;
         float othersBottomFromTop = -othersY + othersReservedHeight;
 
-        // 3. RoundResultPanel(OthersCardParentのさらに下)
         var resultRt = canvasTf.Find("RoundResultPanel")?.GetComponent<RectTransform>();
         float resultBottomFromBottom = 0f;
         if (resultRt != null)
         {
             resultRt.anchorMin = new Vector2(0.5f, 1f);
             resultRt.anchorMax = new Vector2(0.5f, 1f);
-            float resultPanelHeight = Mathf.Clamp(canvasHeight * (portrait ? 0.16f : 0.2f), 160f, 260f);
-            float resultGap = 30f;
+            resultRt.pivot = new Vector2(0.5f, 1f); // 上端pivotにし、はみ出しを防ぐ
             float resultTopOffset = othersBottomFromTop + resultGap;
             resultRt.anchoredPosition = new Vector2(0, -resultTopOffset);
             resultRt.sizeDelta = new Vector2(resultRt.sizeDelta.x, resultPanelHeight);
 
-            resultBottomFromBottom = canvasHeight - (resultTopOffset + resultPanelHeight * 0.5f);
+            resultBottomFromBottom = canvasHeight - (resultTopOffset + resultPanelHeight); // pivotが上端のため、高さ全体を引く(以前は中心pivot前提で半分しか引いておらずズレていた)
         }
 
-// 4. MyCardParent(結果パネルとDebugPanelの間、余白を均等に使う)
-        // カードの実際のスケール(UIEventsManager側と同じ考え方で見積もる)によって、
-        // カード列がアンカー位置からどれだけ下に伸びるかが変わるため、それを踏まえた最低限の
-        // クリアランスを確保する(でないと画面下端やDebugPanelの手前で見切れてしまう)。
-        float cardMaxRowWidth = canvasWidth * 0.92f;
-        float cardWidthBasedCapEst = cardMaxRowWidth / 9f;
-        float cardHeightBasedCapEst = (canvasHeight * (portrait ? 0.32f : 0.27f)) / 3.45f;
-        float cardSpacingCapEst = Mathf.Clamp(Mathf.Min(cardWidthBasedCapEst, cardHeightBasedCapEst), 60f, 210f);
-        float cardScaleEst = Mathf.Clamp(Mathf.Min(cardSpacingCapEst, cardMaxRowWidth / 9f) / 120f, 0.4f, 1.8f);
-        float cardDownwardExtent = 345f * cardScaleEst; // アンカーから最下段カード下端までの見積もり距離
-
-var myCardRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
-        float myCardsY;
-        if (portrait)
+        // MyCardParentのアンカーは、結果パネル下端からresultToCardGap分下。予算が正しく組まれていれば、
+        // これは自動的にcardDownwardExtent+bottomClearanceの条件も満たす(個別の分岐が不要になった)。
+        float myCardsY = resultBottomFromBottom - resultToCardGap;
+        var myCardRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
+        if (myCardRt != null)
         {
-            // 縦持ちは幅が狭く行数が増えやすいため、カードスケールに応じたクリアランスを厳密に計算する連鎖式を使う
-            float myCardsMinY = cardDownwardExtent + 170f; // 画面下端およびDebugPanelとの最低クリアランス
-            float resultSafetyGap = 100f;
-            float myCardsUpperBound = resultBottomFromBottom - resultSafetyGap;
-
-            if (myCardsMinY <= myCardsUpperBound)
-            {
-                myCardsY = Mathf.Clamp(resultBottomFromBottom * 0.42f, myCardsMinY, myCardsUpperBound);
-            }
-            else
-            {
-                // 両方の制約を同時に満たせない場合は、結果パネルとの重なり回避を優先する
-                myCardsY = myCardsUpperBound;
-            }
+            // pivotを一度も設定していなかったため、デフォルトの中心pivotのまま、実際のカード
+            // (アンカーより下方向にのみ描画される)より上に大きくはみ出したプレースホルダー矩形が
+            // 残っており、Confirmボタン等との見かけ上の重なりの原因になっていた。
+            myCardRt.anchorMin = new Vector2(0.5f, 0f);
+            myCardRt.anchorMax = new Vector2(0.5f, 0f);
+            myCardRt.pivot = new Vector2(0.5f, 1f);
+            myCardRt.anchoredPosition = new Vector2(0, myCardsY);
         }
-        else
-        {
-// 横持ちは幅に余裕がありカードスケール推定が過大になりやすいため、Canvas高さに基づく
-            // シンプルな式を基本にしつつ、以下の2点を保証する:
-            // (1) 画面下端を超えて見切れない(カード自体の下方向の広がり分のクリアランス)
-            // (2) RoundResultPanelと重ならない
-            float simpleLandscapeY = Mathf.Clamp(canvasHeight * 0.5f, 300f, 700f);
-            float landscapeMinY = cardDownwardExtent + 20f;
-            float landscapeUpperBound = resultBottomFromBottom - 60f;
 
-            if (landscapeMinY <= landscapeUpperBound)
-            {
-                myCardsY = Mathf.Clamp(simpleLandscapeY, landscapeMinY, landscapeUpperBound);
-            }
-            else
-            {
-                // 両立できない場合は、画面内に収まることを優先する(結果パネルとの重なりより見切れの方が深刻なため)
-                myCardsY = landscapeMinY;
-            }
-        }
-        if (myCardRt != null) myCardRt.anchoredPosition = new Vector2(0, myCardsY);
-
-// 5. Confirmボタン(結果パネルの下端とMyCardParentの間の安全な隙間)。サイズも画面に応じて拡大する。
+        // Confirmボタン(結果パネルの下端とMyCardParentの間の安全な隙間)。サイズも画面に応じて拡大する。
         var confirmRt = canvasTf.Find("BtnConfirmCard")?.GetComponent<RectTransform>();
         if (confirmRt != null)
         {
             confirmRt.anchorMin = new Vector2(0.5f, 0f);
             confirmRt.anchorMax = new Vector2(0.5f, 0f);
-            float confirmY = Mathf.Clamp(myCardsY + 190f, myCardsY + 60f, resultBottomFromBottom - 40f);
-            confirmRt.anchoredPosition = new Vector2(0, confirmY);
-float confirmWidth = Mathf.Clamp(canvasWidth * 0.16f, 160f, 320f);
+            float confirmWidth = Mathf.Clamp(canvasWidth * 0.16f, 160f, 320f);
             float confirmHeight = Mathf.Clamp(canvasHeight * 0.045f, 40f, 90f);
+            float confirmOffset = Mathf.Min(190f, resultToCardGap - 20f) * Mathf.Min(1f, compressionScale + 0.3f);
+            float confirmY = Mathf.Clamp(myCardsY + confirmOffset, myCardsY + 40f, resultBottomFromBottom - confirmHeight * 0.5f - 15f); // ボタン自身の半分の高さ分も安全マージンに含める
+            confirmRt.anchoredPosition = new Vector2(0, confirmY);
             confirmRt.sizeDelta = new Vector2(confirmWidth, confirmHeight);
 
             // BtnNextRoundはConfirmボタンと排他表示(ラウンド中/結果表示中)のため、同じ位置・サイズを使い回す

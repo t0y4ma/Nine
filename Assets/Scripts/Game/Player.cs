@@ -29,7 +29,7 @@ public class Player : NetworkBehaviour
     [SyncVar]
     public bool isReadyForNextRound;
 
-    [SyncVar]
+    [SyncVar(hook = nameof(OnIsRoomHostChanged))]
     public bool isRoomHost;
 
     public int GetPlayerId()
@@ -56,6 +56,13 @@ public class Player : NetworkBehaviour
     }
 
     private void OnInRoomChanged(bool oldVal, bool newVal)
+    {
+        if (!isOwned) return;
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshLobbyPanels();
+    }
+
+    private void OnIsRoomHostChanged(bool oldVal, bool newVal)
     {
         if (!isOwned) return;
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();

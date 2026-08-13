@@ -19,6 +19,19 @@ public class myNetworkManager : NetworkManager
 
     private void Start()
     {
+        // Unity Editorでは、スクリプトの再コンパイルを挟まないPlay→Stop→Playのサイクルにおいて、
+        // MirrorのNetworkServer.active/NetworkClient.active等の静的フラグが正しくリセットされず
+        // 次のセッションに引き継がれてしまうことがある(原因はまだ特定できていないが、繰り返し
+        // 確認された現象)。これにより「Server or Client already started」等の不整合や、
+        // 接続処理がおかしくなる不具合につながっていた。
+        // 対策として、起動時に予期せずactiveなままの状態を検出したら、まず強制的に
+        // クリーンな状態にリセットしてから通常の初期化に進む。
+        if (NetworkServer.active || NetworkClient.active)
+        {
+            Debug.LogWarning("myNetworkManager.Start(): NetworkServer/Client が予期せずactiveな状態で起動しました。強制的にリセットします。");
+            StopHost();
+        }
+
         ConfigureWebGLTransport();
 
         // VM/専用サーバー向けビルド(Dedicated Serverビルド、または -server 起動引数)の場合、

@@ -11,6 +11,29 @@ public class UIEventsManager : NetworkBehaviour
     public TMP_InputField inputField;
     public TMP_Text statusText;
 
+    // タイトル画面のパスワード入力欄。実オブジェクトはGameObject.Findで動的に探す(既存のinputField等と
+    // 同様の追加方法のため、Inspector参照ではなくコード内で解決する)。
+    private TMP_InputField _passwordInputField;
+    private TMP_InputField PasswordInputField
+    {
+        get
+        {
+            if (_passwordInputField == null)
+            {
+                var canvas = GameObject.Find("Canvas");
+                var t = canvas != null ? canvas.transform.Find("RoomPassword") : null;
+                if (t != null) _passwordInputField = t.GetComponent<TMP_InputField>();
+            }
+            return _passwordInputField;
+        }
+    }
+
+    private string GetRoomPassword()
+    {
+        var pw = PasswordInputField;
+        return (pw != null && !string.IsNullOrEmpty(pw.text)) ? pw.text : "";
+    }
+
     public GameObject othersCardParent;
     public GameObject myCardParent;
     public GameObject cardUI;
@@ -324,10 +347,13 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (roomListPanelGO != null) roomListPanelGO.SetActive(showCreate);
         if (roomJoinButtonGO != null) roomJoinButtonGO.SetActive(showJoin);
         if (inputField != null) inputField.gameObject.SetActive(!inRoom);
+        var pwField = PasswordInputField;
+        if (pwField != null) pwField.gameObject.SetActive(!inRoom);
 
         if (lobbyPanel != null) lobbyPanel.SetActive(inRoom && !inGame);
         if (myCardParent != null) myCardParent.SetActive(inGame);
         if (othersCardParent != null) othersCardParent.SetActive(inGame);
+        if (othersLabelsParent != null) othersLabelsParent.SetActive(inGame); // 以前ここが漏れており、空でも常時アクティブなプレースホルダー矩形がロビーのUIと重なっていた
         if (roundResultPanel != null) roundResultPanel.SetActive(inGame);
 
         if (!inGame)
@@ -407,20 +433,20 @@ if (startGameButton != null)
             NetworkManager.singleton.StartCoroutine(AutoHostThenCreateRoom(txt));
             return;
         }
-        roomManager.CmdCreateRoom(txt, "****");
+        roomManager.CmdCreateRoom(txt, GetRoomPassword());
     }
 
     private System.Collections.IEnumerator AutoHostThenCreateRoom(string txt)
     {
         NetworkManager.singleton.StartHost();
         yield return new WaitUntil(() => NetworkClient.ready);
-        roomManager.CmdCreateRoom(txt, "****");
+        roomManager.CmdCreateRoom(txt, GetRoomPassword());
     }
 
     public void ButtonJoinRoom()
     {
         string txt = inputField.text;
-        roomManager.CmdJoinRoom(txt, "****", connectionToClient);
+        roomManager.CmdJoinRoom(txt, GetRoomPassword(), connectionToClient);
     }
 
     public void ButtonStartGame()
@@ -501,13 +527,17 @@ if (startGameButton != null)
         // 大きくなりすぎ、縦方向の余白が確保できなくなるため)。
         float widthBasedCap = maxRowWidth / Mathf.Max(cnt, 1);
         bool cardsIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
-        float heightBasedCap = (canvasHeightForCards * (cardsIsPortrait ? 0.32f : 0.27f)) / 3.45f; // 345*cardScale <= 高さの一定割合となるよう逆算(ResponsiveCanvasScalerの見積もりと一致させる)
+        float heightBasedCap = (canvasHeightForCards * (cardsIsPortrait ? 0.32f : 0.27f) * ResponsiveCanvasScaler.VerticalCompressionScale) / 3.45f; // 345*cardScale <= 高さの一定割合となるよう逆算(ResponsiveCanvasScalerの見積もりと一致させる。圧縮が掛かっている画面ではその分を反映する)
         float cardSpacingCap = Mathf.Clamp(Mathf.Min(widthBasedCap, heightBasedCap), 60f, 210f);
-        float singleRowSpacing = Mathf.Min(cardSpacingCap, maxRowWidth / Mathf.Max(cnt, 1));
-        float singleRowScale = singleRowSpacing / 120f;
+
+        // 折り返す(複数行にする)かどうかは、幅の制約だけで判断する。高さの制約を含めてしまうと、
+        // 「高さが足りないから小さくする」場面でも誤って折り返しが発動してしまう
+        // (行数を増やしても高さの制約はむしろ悪化するだけで、折り返す意味が無いため)。
+        float widthOnlySingleRowSpacing = Mathf.Min(210f, widthBasedCap);
+        float widthOnlySingleRowScale = widthOnlySingleRowSpacing / 120f;
 
         int perRow = cnt;
-        if (singleRowScale < 0.75f && cnt > 5)
+        if (widthOnlySingleRowScale < 0.75f && cnt > 5)
         {
             perRow = Mathf.CeilToInt(cnt / 2f);
         }
@@ -611,7 +641,12 @@ var numUI = child.GetComponent<NumberCardUI>();
             var localPlayer = GetDebugOrLocalPlayer();
             var gm = localPlayer != null ? localPlayer.gameManager : null;
 
-            float othersSpacingForLabel = Mathf.Min(130f, Mathf.Max(150f, GetCanvasWidth() - 100f) / Mathf.Max(cnt, 1));
+            // カード側(othersSpacing)と全く同じ式を使うことで、ラベルとカードの間隔見積もりが必ず一致するようにする。
+            // 以前はここだけ幅のみの式・圧縮率未反映だったため、圧縮が効く画面でラベルがカードにはみ出す原因になっていた。
+            bool labelIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
+            float labelExpectedRows = labelIsPortrait ? 4f : 2f;
+            float labelHeightCap = (GetCanvasHeight() * (labelIsPortrait ? 0.25f : 0.18f) * ResponsiveCanvasScaler.VerticalCompressionScale / labelExpectedRows) / 160f * 110f;
+            float othersSpacingForLabel = Mathf.Min(Mathf.Min(130f, labelHeightCap), Mathf.Max(150f, GetCanvasWidth() - 100f) / Mathf.Max(cnt, 1));
             float labelRowHeight = Mathf.Max(45f, 80f * (othersSpacingForLabel / 55f));
             // ラベルとカードの間隔も、カードスケールに比例させる(固定値だとカードが大きい時に重なるため)
             float labelTopMargin = labelRowHeight * 0.6f;
@@ -655,7 +690,7 @@ var numUI = child.GetComponent<NumberCardUI>();
         // ResponsiveCanvasScaler側の見積もり計算と必ず一致させること。
         bool othersIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
         float othersExpectedRows = othersIsPortrait ? 4f : 2f;
-        float othersHeightCap = (othersCanvasHeight * 0.25f / othersExpectedRows) / 160f * 110f;
+        float othersHeightCap = (othersCanvasHeight * (othersIsPortrait ? 0.25f : 0.18f) * ResponsiveCanvasScaler.VerticalCompressionScale / othersExpectedRows) / 160f * 110f;
         float othersSpacing = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailableWidth / Mathf.Max(cnt, 1));
         float othersScale = 0.5f * (othersSpacing / 55f);
         float othersRowHeight = Mathf.Max(45f, 80f * othersScale / 0.5f);
@@ -731,7 +766,12 @@ float maxPanelWidth = canvasWidthForResults * 0.6f;
 
         int slotCountForSpacing = Mathf.Max(players.Count, 1);
         float resultSlotSpacing = Mathf.Min(220f, (maxPanelWidth - 20f) / slotCountForSpacing);
-        float resultSlotScale = Mathf.Clamp(resultSlotSpacing / 110f, 0.45f, 1.4f); // パネル高さの上限(220)を超えないよう安全な範囲に留める
+        // スロットのスケールは、幅由来の見積もりだけでなく、パネルの実際の高さ(圧縮されている場合は
+        // その圧縮後の値)を必ず超えないようにする。以前は幅のみで決めていたため、パネルの高さが
+        // 圧縮された画面でスロット(ネイティブ高さ140)がパネルからはみ出すことがあった。
+        float panelActualHeight = panelRt.sizeDelta.y;
+        float heightBasedSlotScaleCap = Mathf.Max(0.3f, (panelActualHeight - 20f) / 140f);
+        float resultSlotScale = Mathf.Clamp(Mathf.Min(resultSlotSpacing / 110f, heightBasedSlotScaleCap), 0.3f, 1.4f);
 
         while (roundResultPanel.transform.childCount < players.Count)
         {

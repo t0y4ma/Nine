@@ -58,6 +58,13 @@ public class GameManager : NetworkBehaviour
         {
             p.used.Clear();
             for (int c = 0; c < CARDCOUNT; c++) p.used.Add(false);
+
+            // usedだけでなくcardsリストも新しいCARDCOUNTに合わせて作り直す必要がある。
+            // ここが漏れていたため、カード枚数を増やした後に新しく増えた分のカード
+            // (例: 10枚目以降)を選んでConfirmしても、CmdUseCard内のcards.Countによる
+            // 範囲チェックで弾かれ、提出できないというバグになっていた。
+            p.cards.Clear();
+            for (int c = 1; c <= CARDCOUNT; c++) p.cards.Add(c);
         }
     }
 
