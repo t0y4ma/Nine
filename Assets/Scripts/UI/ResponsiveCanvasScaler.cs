@@ -162,43 +162,59 @@ if (portrait)
         }
         else
         {
-            SetPos(canvasTf, "ConnectPanel/AddressInput", new Vector2(-260, 0));
-            SetSize(canvasTf, "ConnectPanel/AddressInput", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnHost", new Vector2(0, 0));
-            SetSize(canvasTf, "ConnectPanel/BtnHost", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnConnect", new Vector2(260, 0));
-            SetSize(canvasTf, "ConnectPanel/BtnConnect", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnServer", new Vector2(0, -60));
-            SetSize(canvasTf, "ConnectPanel/BtnServer", btnSizeLandscape);
-            SetSize(canvasTf, "ConnectPanel", new Vector2(760, 120));
-            SetPos(canvasTf, "ConnectPanel", new Vector2(0, -140));
+            // 横持ちのロビークラスタは、以前は固定ピクセル値(200や-50など)で配置しており、
+            // 4K等の非常に大きい画面ではボタン自体が上限近くまで大きくなるため固定値では
+            // 足りず重なりが発生していた。実際のボタンサイズ(btnSizeLandscape)から
+            // 動的に間隔を計算する方式に変更する。
+            float hGap = btnSizeLandscape.x + 40f; // 横並びの中心間隔
+            float vGap2 = btnSizeLandscape.y + 20f; // 縦並びの中心間隔
 
-            SetPos(canvasTf, "RoomCreate", new Vector2(0, 0));
+            // Room作成/参加クラスタを2x2グリッドで配置
+            SetPos(canvasTf, "RoomCreate", new Vector2(-hGap * 0.5f, vGap2 * 0.5f));
             SetSize(canvasTf, "RoomCreate", btnSizeLandscape);
-            SetPos(canvasTf, "RoomJoin", new Vector2(0, 100));
+            SetPos(canvasTf, "RoomJoin", new Vector2(-hGap * 0.5f, -vGap2 * 0.5f));
             SetSize(canvasTf, "RoomJoin", btnSizeLandscape);
-            SetPos(canvasTf, "RoomId", new Vector2(200, 0));
+            SetPos(canvasTf, "RoomId", new Vector2(hGap * 0.5f, vGap2 * 0.5f));
             SetSize(canvasTf, "RoomId", btnSizeLandscape);
-            SetPos(canvasTf, "RoomPassword", new Vector2(200, -50));
+            SetPos(canvasTf, "RoomPassword", new Vector2(hGap * 0.5f, -vGap2 * 0.5f));
             SetSize(canvasTf, "RoomPassword", btnSizeLandscape);
+            float roomClusterBottomY = -vGap2 * 0.5f - btnSizeLandscape.y * 0.5f;
 
-            SetPos(canvasTf, "LobbyPanel", new Vector2(0, -140));
-            SetSize(canvasTf, "LobbyPanel", new Vector2(560, 120));
-            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(-180, 0));
+            float connectClusterGap = 40f;
+            float connectPanelHeight = vGap2 * 2f + btnSizeLandscape.y + 20f; // 2行分
+            float connectPanelWidth = hGap * 2f + btnSizeLandscape.x + 40f; // 3列分(AddressInput/Host/Connect)
+            float connectPanelCenterY = roomClusterBottomY - connectClusterGap - connectPanelHeight * 0.5f;
+            SetPos(canvasTf, "ConnectPanel", new Vector2(0, connectPanelCenterY));
+            SetSize(canvasTf, "ConnectPanel", new Vector2(connectPanelWidth, connectPanelHeight));
+            SetPos(canvasTf, "ConnectPanel/AddressInput", new Vector2(-hGap, vGap2 * 0.5f));
+            SetSize(canvasTf, "ConnectPanel/AddressInput", btnSizeLandscape);
+            SetPos(canvasTf, "ConnectPanel/BtnHost", new Vector2(0, vGap2 * 0.5f));
+            SetSize(canvasTf, "ConnectPanel/BtnHost", btnSizeLandscape);
+            SetPos(canvasTf, "ConnectPanel/BtnConnect", new Vector2(hGap, vGap2 * 0.5f));
+            SetSize(canvasTf, "ConnectPanel/BtnConnect", btnSizeLandscape);
+            SetPos(canvasTf, "ConnectPanel/BtnServer", new Vector2(0, -vGap2 * 0.5f));
+            SetSize(canvasTf, "ConnectPanel/BtnServer", btnSizeLandscape);
+
+            SetPos(canvasTf, "LobbyPanel", new Vector2(0, connectPanelCenterY));
+            SetSize(canvasTf, "LobbyPanel", new Vector2(connectPanelWidth, connectPanelHeight));
+            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(-hGap, 0));
             SetSize(canvasTf, "LobbyPanel/BtnReady", btnSizeLandscape);
-            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(60, 0));
+            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0, 0));
             SetSize(canvasTf, "LobbyPanel/ReadyStatusText", btnSizeLandscape);
-            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(230, 0));
-            SetSize(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(150, 30));
+            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(hGap, 0));
+            SetSize(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(btnSizeLandscape.x, 30));
 
-SetPos(canvasTf, "StartGame", new Vector2(-200, 0));
+            float connectPanelBottomY = connectPanelCenterY - connectPanelHeight * 0.5f;
+            float startGameY = connectPanelBottomY - connectClusterGap - btnHeight * 0.5f;
+            SetPos(canvasTf, "StartGame", new Vector2(-hGap * 0.5f, startGameY));
             SetSize(canvasTf, "StartGame", btnSizeLandscape);
 
-            SetPos(canvasTf, "BtnSettings", new Vector2(-200, -60));
+            SetPos(canvasTf, "BtnSettings", new Vector2(hGap * 0.5f, startGameY));
             SetSize(canvasTf, "BtnSettings", btnSizeLandscape);
 
             // RoomListPanelは、横持ちでは横幅に余裕があるため左側に配置し、
             // RoomCreate/ConnectPanelクラスタ(画面中央)と重ならないようにする。
+            // ConnectPanelの実際の幅(connectPanelWidth、4K等では広がる)を基準に位置を計算する。
             float roomListWidth = Mathf.Clamp(canvasWidth * 0.2f, 260f, 400f);
             float roomListHeight = 260f;
             var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
@@ -207,7 +223,7 @@ SetPos(canvasTf, "StartGame", new Vector2(-200, 0));
                 roomListRt.anchorMin = new Vector2(0.5f, 0.5f);
                 roomListRt.anchorMax = new Vector2(0.5f, 0.5f);
                 roomListRt.pivot = new Vector2(0.5f, 0.5f);
-                float roomListX = -(380f + 40f + roomListWidth * 0.5f); // ConnectPanel左端(-380)よりさらに左
+                float roomListX = -(connectPanelWidth * 0.5f + 40f + roomListWidth * 0.5f);
                 roomListRt.anchoredPosition = new Vector2(roomListX, 0);
                 roomListRt.sizeDelta = new Vector2(roomListWidth, roomListHeight);
             }
