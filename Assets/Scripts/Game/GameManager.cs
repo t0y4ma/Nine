@@ -10,6 +10,9 @@ public class GameManager : NetworkBehaviour
     private List<int> turncards = new();
     public readonly SyncList<int> roundWins = new();
     public readonly SyncList<int> lastRevealedPicks = new();
+    // ラウンド終了ごとに1行ずつ追加されるログ。「誰が何を出し、結果として誰が何ptで勝ったか」を記録する。
+    // クライアント側の履歴パネルは、この変更(Callback)を購読して表示を追記していく。
+    public readonly SyncList<string> roundHistoryLog = new();
     private int roundsPlayed = 0;
 
     private const float ROUND_TRANSITION_DELAY = 2.5f; // 最大の緩衝時間(秒)。全員がNextを押せばこれより早く進む
@@ -29,6 +32,44 @@ public class GameManager : NetworkBehaviour
     public void DeleteMatch()
     {
         NetworkServer.Destroy(gameObject);
+    }
+
+    public override void OnStartClient()
+    {
+        base.OnStartClient();
+        // roundHistoryLogへの追加をUIの履歴パネルに反映するための購読。
+        // SyncListのCallbackはクライアント側で明示的に登録する必要がある。
+        roundHistoryLog.Callback += OnRoundHistoryChanged;
+    }
+
+    private void OnRoundHistoryChanged(SyncList<string>.Operation op, int index, string oldItem, string newItem)
+    {
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        if (uiManager == null) return;
+
+        if (op == SyncList<string>.Operation.OP_ADD)
+        {
+            // "roundNumber|card0,card1,...|winnerId|tie|resultLabel" をパースして渡す
+            var parts = newItem.Split('|');
+            if (parts.Length < 5) return;
+            int roundNumber = 0; int.TryParse(parts[0], out roundNumber);
+            var cards = new List<int>();
+            if (!string.IsNullOrEmpty(parts[1]))
+            {
+                foreach (var s in parts[1].Split(','))
+                {
+                    int v = 0; int.TryParse(s, out v);
+                    cards.Add(v);
+                }
+            }
+            int winnerId = -1; int.TryParse(parts[2], out winnerId);
+            bool tie = parts[3] == "1";
+            uiManager.AppendHistoryLine(roundNumber, cards, winnerId, tie, parts[4]);
+        }
+        else if (op == SyncList<string>.Operation.OP_CLEAR)
+        {
+            uiManager.ClearHistoryPanel();
+        }
     }
 
 // 設定変更(カード枚数・得点方式)。ゲーム開始前、ホストのみが呼び出せる想定。
@@ -86,6 +127,7 @@ public class GameManager : NetworkBehaviour
         for (int i = 0; i < roundWins.Count; i++) roundWins[i] = 0;
         for (int i = 0; i < lastRevealedPicks.Count; i++) lastRevealedPicks[i] = 0;
         roundsPlayed = 0;
+        roundHistoryLog.Clear();
 
         foreach (var playerCom in room.playerComponents)
         {
@@ -210,6 +252,17 @@ public class GameManager : NetworkBehaviour
 
         RpcRoundTransitionProgress(0f);
 
+        // ゲーム終了の判定・表示は、盤面をクリアする「前」に行う。
+        // 以前は盤面をクリアしてロビー状態に戻した後にGameOverを表示していたため、
+        // 最終ラウンドの結果(誰が何を出したか)が画面から消えた状態で結果発表される、
+        // という分かりにくい挙動になっていた。
+        bool gameEnded = (roundsPlayed >= CARDCOUNT);
+        if (gameEnded)
+        {
+            CheckGameOver();
+            yield break; // 盤面は最終ラウンドの状態のまま残す(次ゲーム開始時にStartGameがリセットする)
+        }
+
         for (int i = 0; i < turncards.Count; i++) turncards[i] = 0;
         for (int i = 0; i < lastRevealedPicks.Count; i++) lastRevealedPicks[i] = 0;
 
@@ -221,9 +274,7 @@ public class GameManager : NetworkBehaviour
 
         RpcRevealBoard();
 
-        CheckGameOver();
-
-        if (inProgress) StartRound();
+        StartRound();
     }
 
     [ClientRpc]
@@ -276,6 +327,7 @@ public class GameManager : NetworkBehaviour
             if (playedCards[i] > 0) lastRevealedPicks[i] = playedCards[i];
         }
 
+        int pointsGainedThisRound = 0;
         if (!tie && winnerId >= 0)
         {
             int pointsToAdd = 1;
@@ -290,9 +342,27 @@ public class GameManager : NetworkBehaviour
                 pointsToAdd = Mathf.Max(1, sum); // 念のため最低1pt保証
             }
             roundWins[winnerId] = roundWins[winnerId] + pointsToAdd;
+            pointsGainedThisRound = pointsToAdd;
         }
 
         roundsPlayed++;
+
+        // 履歴ログの1行を、クライアント側でリッチUIに変換できるよう構造化した形式で記録する。
+        // 形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel"
+        string resultLabel;
+        if (tie) resultLabel = "Tie";
+        else if (winnerId >= 0)
+        {
+            string winnerName = (winnerId < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[winnerId].playerName))
+                ? room.playerComponents[winnerId].playerName
+                : ("P" + winnerId);
+            resultLabel = winnerName + " +" + pointsGainedThisRound + "pt";
+        }
+        else resultLabel = "";
+
+        var cardsCsv = string.Join(",", playedCards);
+        roundHistoryLog.Add(roundsPlayed + "|" + cardsCsv + "|" + winnerId + "|" + (tie ? "1" : "0") + "|" + resultLabel);
+
         RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie);
         RpcRevealBoard();
     }
@@ -334,27 +404,51 @@ public class GameManager : NetworkBehaviour
         int best = -1;
         int winnerId = -1;
         bool tie = false;
+        // roundWinsはこの後リセットされるため、表示用に最終スコアを控えておく
+        var finalScores = new List<int>(roundWins);
         for (int i = 0; i < roundWins.Count; i++)
         {
             if (roundWins[i] > best) { best = roundWins[i]; winnerId = i; tie = false; }
             else if (roundWins[i] == best) tie = true;
         }
 
-        // 次のゲームに備えて、全員のReady状態をリセットする(再戦には全員の再Readyが必要)
-        foreach (var p in room.playerComponents) p.isReadyToStart = false;
+        // 次のゲームに備えて、プレイヤーの操作状態のみリセットする。
+        // 盤面(used_Players/turncards/lastRevealedPicks/roundWins)は、最終ラウンドの結果を
+        // 画面に残したままGameOverを表示するため、ここではクリアしない。
+        // これらは次のゲーム開始時にStartGame()が確実にリセットする。
+        foreach (var p in room.playerComponents)
+        {
+            p.isReadyToStart = false;
+            p.isReadytoTurn = false;
+            p.isReadyForNextRound = false;
+        }
         RefreshLobbyStatus();
 
-        RpcGameOver(winnerId, tie);
+        // 最終スコア一覧を組み立てて渡す(誰が何ptで勝ったかが分かるようにする)
+        var scoreSb = new System.Text.StringBuilder();
+        for (int i = 0; i < finalScores.Count; i++)
+        {
+            string pname = (i < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[i].playerName))
+                ? room.playerComponents[i].playerName
+                : ("Player " + i);
+            scoreSb.AppendLine(pname + ": " + finalScores[i] + " pt");
+        }
+
+        RpcGameOver(winnerId, tie, best, scoreSb.ToString());
     }
 
     [ClientRpc]
-    private void RpcGameOver(int winnerId, bool tie)
+    private void RpcGameOver(int winnerId, bool tie, int winningScore, string scoreBoard)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         if (uiManager == null) return;
 
-        string message = tie ? "It's a tie!" : ("Player " + winnerId + " wins!");
-        uiManager.ShowResult(message);
+        string headline = tie
+            ? ("It's a tie! (" + winningScore + " pt)")
+            : ("Player " + winnerId + " wins with " + winningScore + " pt!");
+        // 結果はGameOverPanelに大きく表示するため、StatusText側には出さない。
+        // (StatusTextに出すと、ロビーに戻った後も前ゲームの結果が残って見え続けてしまう)
+        uiManager.ShowGameOverPanel("GAME OVER\n\n" + headline + "\n\n" + scoreBoard);
     }
 
     [Server]

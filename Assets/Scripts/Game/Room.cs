@@ -45,6 +45,25 @@ public class Room
         players.Remove(player);
         playerComponents.Remove(playerCom);
         player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;
+
+        // 以前はここでplayerComのSyncVar(inRoom等)がリセットされておらず、切断以外の経路
+        // (例: Leaveボタン)でプレイヤーを退出させると、クライアント側UIがロビー画面に
+        // 戻らないままになってしまっていた。明示的にリセットする。
+        if (playerCom != null)
+        {
+            playerCom.inRoom = false;
+            playerCom.isRoomHost = false;
+            playerCom.isReadyToStart = false;
+            playerCom.room = null;
+            playerCom.gameManager = null;
+        }
+
+        // 残ったプレイヤーのIDを詰め直す(playerComponentsのindexとplayerIdが常に一致する前提の設計のため)
+        for (int i = 0; i < playerComponents.Count; i++)
+        {
+            playerComponents[i].playerId = i;
+        }
+
         if (players.Count == 0) { DeleteRoom(); return; }
         gameManager.RefreshLobbyStatus();
     }

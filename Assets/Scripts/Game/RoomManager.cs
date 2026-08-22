@@ -72,6 +72,16 @@ public class RoomManager : NetworkBehaviour
     }
 
 [Command(requiresAuthority = false)]
+    public void CmdLeaveRoom(string roomId, NetworkConnectionToClient sender = null)
+    {
+        if (!roomDict.TryGetValue(roomId, out var info)) return;
+        // 退出者がホストだった場合、部屋を作成したクライアントが誰もいなくなるが、
+        // Room.RemovePlayerは残り0人になった時点で自動的に部屋自体を削除するため、
+        // 残ったメンバーがいる場合の「ホスト権限の引き継ぎ」は別途今後の課題とする。
+        info.room.RemovePlayer(sender);
+    }
+
+    [Command(requiresAuthority = false)]
     public void CmdUpdateSettings(string roomId, int cardCount, int scoringMode, int maxPlayers, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.TryGetValue(roomId, out var info)) return;
