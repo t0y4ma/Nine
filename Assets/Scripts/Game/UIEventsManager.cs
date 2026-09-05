@@ -151,6 +151,18 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         var panel = FindSettingsPanel();
         if (panel == null) return;
 
+        // モーダルなので最前面に出す。
+        // (他要素が上に重なると、背景が透けているように見えてしまう)
+        panel.SetAsLastSibling();
+
+        // 開くたびにレイアウト(位置・サイズ・フォント)を適用し直す。
+        // シーン上に残っている固定値のままにならないようにするため。
+        // パネルの親階層からScalerを辿る(GameObject.Find("Canvas")は
+        // 名前変更や非アクティブ時に失敗するため使わない)
+        var scaler = panel.GetComponentInParent<ResponsiveCanvasScaler>();
+        if (scaler != null) scaler.ReapplySettingsPanel();
+        SetModalDimActive(true);
+
         var localPlayer = GetDebugOrLocalPlayer();
         var gm = localPlayer != null ? localPlayer.gameManager : null;
 
@@ -158,7 +170,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (cardCountInput != null) cardCountInput.text = (gm != null ? gm.CARDCOUNT : 9).ToString();
 
         var maxPlayersInputOpen = panel.Find("MaxPlayersInput")?.GetComponent<TMP_InputField>();
-        if (maxPlayersInputOpen != null) maxPlayersInputOpen.text = (gm != null ? gm.MaxPlayers : 8).ToString();
+        if (maxPlayersInputOpen != null) maxPlayersInputOpen.text = (gm != null ? gm.MaxPlayers : GameManager.MAX_PLAYERS_LIMIT).ToString();
 
         _pendingScoringMode = gm != null ? gm.ScoringMode : 0;
         RefreshScoringButtonHighlight(panel);
@@ -170,6 +182,29 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     {
         var panel = FindSettingsPanel();
         if (panel != null) panel.gameObject.SetActive(false);
+        SetModalDimActive(false);
+    }
+
+    // 暗幕の表示状態を設定画面に追従させる。
+    // Applyや外部要因でパネルが閉じられても暗幕が残らないようにするための保険。
+    private void SyncModalDimToPanel()
+    {
+        var panel = FindSettingsPanel();
+        if (panel == null) return;
+        var dim = panel.parent?.Find("ModalDim");
+        if (dim == null) return;
+        bool shouldShow = panel.gameObject.activeSelf;
+        if (dim.gameObject.activeSelf != shouldShow) dim.gameObject.SetActive(shouldShow);
+    }
+
+    // モーダル背後の暗幕の表示を切り替える。
+    // 暗幕はCanvas直下にあるため、パネルの表示状態と別に管理する必要がある。
+    private void SetModalDimActive(bool active)
+    {
+        var canvasTf = FindSettingsPanel()?.parent;
+        if (canvasTf == null) return;
+        var dim = canvasTf.Find("ModalDim");
+        if (dim != null) dim.gameObject.SetActive(active);
     }
 
     private void SelectScoringMode(int mode)
@@ -200,20 +235,21 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         {
             int.TryParse(cardCountInput.text, out cardCount);
         }
-        cardCount = Mathf.Clamp(cardCount, 3, 20);
+        cardCount = Mathf.Clamp(cardCount, 3, GameManager.CARD_COUNT_LIMIT);
 
         var maxPlayersInput = panel.Find("MaxPlayersInput")?.GetComponent<TMP_InputField>();
-        int maxPlayers = 8;
+        int maxPlayers = GameManager.MAX_PLAYERS_LIMIT;
         if (maxPlayersInput != null && !string.IsNullOrEmpty(maxPlayersInput.text))
         {
             int.TryParse(maxPlayersInput.text, out maxPlayers);
         }
-        maxPlayers = Mathf.Clamp(maxPlayers, 2, 20);
+        maxPlayers = Mathf.Clamp(maxPlayers, 2, GameManager.MAX_PLAYERS_LIMIT);
 
         string roomId = inputField != null ? inputField.text : "";
         roomManager.CmdUpdateSettings(roomId, cardCount, _pendingScoringMode, maxPlayers, connectionToClient);
 
         panel.gameObject.SetActive(false);
+        SetModalDimActive(false);
     }
 
     // 接続に失敗した(一度も繋がらないまま切断された)場合、その旨を表示する
@@ -234,6 +270,20 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         {
             _lastConnected = connected;
             RefreshLobbyPanels();
+        }
+
+        // 暗幕は設定画面の表示状態に常に追従させる。
+        // 個々の閉じ処理で消し忘れると暗いまま残るため、ここで一元管理する。
+        SyncModalDimToPanel();
+
+        // 「今出したカード」はOthersCardParentの兄弟オブジェクトなので、
+        // 親の表示切替に自動では追従しない。ここで状態を合わせる。
+        // (合わせないと、Leaveでロビーに戻ってもカードが残り続ける)
+        if (playedCardsParent != null && othersCardParent != null)
+        {
+            bool shouldShow = othersCardParent.activeSelf;
+            if (playedCardsParent.activeSelf != shouldShow)
+                playedCardsParent.SetActive(shouldShow);
         }
 
         if (roundTimerBarFill != null)
@@ -423,7 +473,9 @@ if (startGameButton != null)
         if (btnLeaveGO != null) btnLeaveGO.SetActive(inRoom);
         // 横持ちで余裕がある画面では履歴を常駐表示し、開閉ボタン自体を不要にする。
         // 狭い画面ではボタンによるポップアップ形式にする。
-        bool docked = ResponsiveCanvasScaler.IsHistoryDockedMode;
+        // 履歴は常にボタンで開閉するポップアップ形式にする。
+        // (常駐モードはゲーム本体の幅を圧迫し、レイアウト計算を複雑にしていたため廃止)
+        bool docked = false;
         var btnHistoryGO = canvasForButtons?.Find("BtnHistory")?.gameObject;
         if (btnHistoryGO != null) btnHistoryGO.SetActive(inRoom && !docked);
         var historyPanelForDock = canvasForButtons?.Find("HistoryPanel")?.gameObject;
@@ -441,6 +493,7 @@ if (startGameButton != null)
         {
             var settingsPanel = FindSettingsPanel();
             if (settingsPanel != null) settingsPanel.gameObject.SetActive(false);
+            SetModalDimActive(false);
         }
 
         // StatusTextはゲーム中の状況表示専用。Leaveやゲーム終了でロビー/タイトルに戻った際に
@@ -484,7 +537,7 @@ if (startGameButton != null)
         var playerCountText = canvas != null ? canvas.transform.Find("LobbyPanel/PlayerCountText")?.GetComponent<TMP_Text>() : null;
         if (playerCountText != null)
         {
-            int max = gm != null ? gm.MaxPlayers : 8;
+            int max = gm != null ? gm.MaxPlayers : GameManager.MAX_PLAYERS_LIMIT;
             playerCountText.text = "Players: " + totalCount + " / " + max;
         }
     }
@@ -569,7 +622,7 @@ if (startGameButton != null)
             tmp.enableAutoSizing = true;
             tmp.fontSizeMin = 12;
             tmp.fontSizeMax = 20;
-            tmp.enableWordWrapping = false;
+            tmp.textWrappingMode = TextWrappingModes.NoWrap;
             tmp.overflowMode = TextOverflowModes.Truncate;
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
@@ -587,378 +640,443 @@ if (startGameButton != null)
         RefreshMyCardView(a, 5);
     }
 
-[Client]
-    public void RefreshMyCardView(List<bool> used, int cnt)
-    {
-        float canvasWidth = GetCanvasWidth();
-        float canvasHeightForCards = GetCanvasHeight();
-        // 履歴パネルが右側に常駐している場合、その分だけ使える幅が減る
-        float maxRowWidth = canvasWidth * 0.92f * ResponsiveCanvasScaler.AvailableGameWidthRatio;
+    // ===== カード表示 =====
+    // 基準解像度(1920x1080)上で組む。他解像度へはCanvasScalerが自動スケールする。
+    // 以前は画面サイズから毎回スケールを手計算していたが、CanvasScalerが
+    // 正しく効くようになったため、固定サイズで組めるようになった。
 
-        // 1行に収めた場合の縮小率を試算し、小さくなりすぎる場合は複数行に折り返す。
-        // 間隔の上限は幅だけでなく高さからも制限する(横長画面で幅基準のみだとカードが
-        // 大きくなりすぎ、縦方向の余白が確保できなくなるため)。
-        bool cardsIsPortrait = ResponsiveCanvasScaler.IsPortraitMode;
-        float heightBasedCap = (canvasHeightForCards * (cardsIsPortrait ? 0.32f : 0.27f) * ResponsiveCanvasScaler.VerticalCompressionScale) / 3.45f; // 345*cardScale <= 高さの一定割合となるよう逆算(ResponsiveCanvasScalerの見積もりと一致させる。圧縮が掛かっている画面ではその分を反映する)
-        // widthBasedCap/cardSpacingCapは折り返し行数(perRow)確定後に計算する(下記参照)
+    // NumberCardUIプレハブの実寸(唯一の定義)
+    // NumberCardUIプレハブの実寸(RectTransform.sizeDeltaの実測値)。
+    // 以前ここを140としていたため、実際(110)との30pxの誤差が
+    // ラベル位置・ブロック高・手札の下端など、全ての縦計算をズラしていた。
+    private const float CARD_W = 90f;
+    private const float CARD_H = 110f;
 
-        // 折り返す(複数行にする)かどうかは、幅の制約だけで判断する。高さの制約を含めてしまうと、
-        // 「高さが足りないから小さくする」場面でも誤って折り返しが発動してしまう
-        // (行数を増やしても高さの制約はむしろ悪化するだけで、折り返す意味が無いため)。
-        // 以前は「2行にするかどうか」の二択だったため、20枚のような多い枚数では
-        // 1行10枚となり、カードの数字が読めないサイズ(20px程度)まで縮んでいた。
-        // ここでは「1枚あたり最低これだけの幅が欲しい」という目標値から必要な行数を求め、
-        // 必要なら3行以上にも折り返すことで、常に読めるサイズを保つ。
-        // 横持ちは縦が狭いため、行を増やすと縦を圧迫する。横幅に余裕があるので
-        // 1枚あたりの目標幅を下げて、なるべく少ない行数で横に並べる。
-        float desiredCardSpacing = cardsIsPortrait ? 95f : 60f;
-        int desiredPerRow = Mathf.Max(1, Mathf.FloorToInt(maxRowWidth / desiredCardSpacing));
-        int maxRows = cardsIsPortrait ? 6 : 2; // 横持ちは2行までに抑える
-        int rows = Mathf.Clamp(Mathf.CeilToInt((float)cnt / desiredPerRow), 1, maxRows);
-        int perRow = Mathf.CeilToInt((float)cnt / rows);
-        // 実際の行数をレイアウト側と共有する(行数が増えると縦方向の占有も増えるため)
-        ResponsiveCanvasScaler.MyCardRowCount = rows;
+    // カード列に使ってよい幅。Canvasの実幅から左右マージンを引いて求める。
+    // 固定値(1800)にしていたため、実際のCanvas幅より狭い場合に
+    // 横幅を25%しか使わずカードが極端に縮んでいた。
+    private float RowMaxWidth => Mathf.Max(300f, GetCanvasWidth() - 80f);
 
-        // 幅の制約は「折り返した後の1行あたり枚数(perRow)」で計算する。
-        // 以前は全枚数(cnt)で割っていたため、20枚を2行に折り返しても
-        // 「20枚を1行に並べる」前提の狭い値になり、下限60でクランプされてカードが
-        // 極端に小さくなっていた。
-        float widthBasedCap = maxRowWidth / Mathf.Max(perRow, 1);
-        float cardSpacingCap = Mathf.Clamp(Mathf.Min(widthBasedCap, heightBasedCap), 60f, 210f);
-        float spacing = Mathf.Min(cardSpacingCap, maxRowWidth / perRow);
-        // 基準値を120にしていたため、実際のカード幅(約90)に対して大きすぎ、
-        // 画面幅に余裕があってもスケールが1.0付近で頭打ちになり、カードが小さいままだった。
-        // 実際のカード幅+最小間隔(95)を基準にして、余った幅を活かせるようにする。
-        // 縦が狭い画面では、手札が縦を占有しすぎて使用済み一覧を圧迫する。
-        // 手札に割ける高さから逆算した上限も掛けることで、両者のバランスを取る。
-        float myAllowedHeight = canvasHeightForCards * (cardsIsPortrait ? 0.34f : 0.30f);
-        float scaleCapByMyHeight = Mathf.Max(0.4f, (myAllowedHeight / Mathf.Max(rows, 1)) / 150f);
-        float cardScale = Mathf.Clamp(Mathf.Min(spacing / 95f, scaleCapByMyHeight), 0.4f, 1.8f);
-        float rowHeight = 145f * cardScale;
+    // 自分の手札: 大きめ。使用済み一覧: 小さめ。の2段階
+    private const float MY_CARD_SCALE_MAX = 1.0f;
+    private const float OTHERS_CARD_SCALE_MAX = 0.78f;
 
-        // 実際にアンカーから下方向へ広がる距離をレイアウト側と共有する。
-        // 見積もり式(345*scale等)は実配置とズレることがあり、それが原因で
-        // 手札が画面下端からはみ出していたため、実値を使えるようにする。
-        // rowHeightは行ピッチ(145*scale)。最下段カードはアンカーから rowHeight*rows だけ下がり、
-        // さらにカード自身の高さの半分だけ下に広がる。余裕を持たせて確実に画面内に収める。
-        // 実際の配置式( y = -300*cardScale + (rows-1-row)*rowHeight )に合わせる。
-        // 最下段(row = rows-1)のyは -300*cardScale なので、そこからカード半分下がる。
-        // 以前はこの-300オフセットを考慮しておらず、手札が画面外にはみ出していた。
-        float newExtent = 300f * cardScale + 140f * cardScale * 0.5f + 30f;
-        if (!Mathf.Approximately(newExtent, ResponsiveCanvasScaler.MyCardActualDownwardExtent))
-        {
-            // 値が変わった場合はレイアウトを再適用して手札の位置に反映させる
-            // (カード描画はレイアウト計算より後に走るため、1回では反映されない)
-            ResponsiveCanvasScaler.MyCardActualDownwardExtent = newExtent;
-            var scalerComp = GameObject.Find("Canvas")?.GetComponent<ResponsiveCanvasScaler>();
-            if (scalerComp != null) scalerComp.ReapplyLayout();
-        }
-
-        if (cnt > myCardParent.transform.childCount)
-        {
-            for (int i = myCardParent.transform.childCount; i < cnt; i++)
-            {
-                var card = Instantiate(cardUI, new Vector3(), Quaternion.identity, myCardParent.transform);
-                var numUI = card.GetComponent<NumberCardUI>();
-                numUI.Setup(i + 1);
-                int capturedIndex = i;
-                UnityAction func = () => { SelectCard(capturedIndex); };
-                numUI.SetListener(func);
-            }
-        }
-        for (int i = 0; i < cnt; i++)
-        {
-            int row = i / perRow;
-            int rowStart = row * perRow;
-            int itemsInRow = Mathf.Min(perRow, cnt - rowStart);
-            int col = i - rowStart;
-
-var child = myCardParent.transform.GetChild(i);
-            child.gameObject.SetActive(true); // 以前に枚数が減った際に非表示化されたカードを再度有効化する
-            var rT = child.GetComponent<RectTransform>();
-            rT.localScale = new Vector3(cardScale, cardScale, cardScale);
-            float x = col * spacing - itemsInRow * spacing * 0.5f + spacing * 0.5f;
-            float y = -300f * cardScale + (rows - 1 - row) * rowHeight;
-            rT.anchoredPosition = new Vector3(x, y, 0);
-
-var numUI = child.GetComponent<NumberCardUI>();
-            numUI.SetUsed(used[i]);
-            numUI.SetSelected(i == _selectedCardIndex);
-        }
-
-        // カード枚数が(以前の部屋等より)減った場合、余分な古いカードが残ったままにならないよう非表示にする
-        for (int i = cnt; i < myCardParent.transform.childCount; i++)
-        {
-            myCardParent.transform.GetChild(i).gameObject.SetActive(false);
-        }
-    }
-
-    // カードをクリックした際、まだ確定せず選択状態にするだけ(別のカードを選び直せる)
-    public void SelectCard(int cardindex)
-    {
-        var targetPlayer = GetDebugOrLocalPlayer();
-        if (targetPlayer == null || targetPlayer.isReadytoTurn) return; // 既に確定済みなら選択不可
-        if (cardindex >= 0 && cardindex < targetPlayer.used.Count && targetPlayer.used[cardindex]) return; // 使用済みカードは選べない
-
-        _selectedCardIndex = (cardindex == _selectedCardIndex) ? -1 : cardindex; // 同じカードをもう一度押すと選択解除
-        RefreshMyCardView(targetPlayer.used.ToList(), targetPlayer.used.Count);
-        if (confirmButtonGO != null) confirmButtonGO.SetActive(_selectedCardIndex >= 0);
-    }
-
-    // 選択中のカードを確定し、サーバーに送信する
+    // 選択したカードを確定して提出する
     public void ButtonConfirmCard()
     {
         var targetPlayer = GetDebugOrLocalPlayer();
         if (targetPlayer == null || targetPlayer.isReadytoTurn) return;
         if (_selectedCardIndex < 0) return;
 
-        int cardindex = _selectedCardIndex;
-
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // デバッグで他プレイヤー(Bot等)を操作している場合、そのPlayerの所有権は
+        // こちらに無いためCommandが拒否される("called without authority")。
+        // サーバー上で直接実行できるDebugUseCardを使う。
         if (debugTargetPlayer != null)
         {
-            debugTargetPlayer.DebugUseCard(cardindex);
+            debugTargetPlayer.DebugUseCard(_selectedCardIndex);
             _selectedCardIndex = -1;
             if (confirmButtonGO != null) confirmButtonGO.SetActive(false);
             return;
         }
 #endif
-        var player = NetworkClient.connection?.identity?.GetComponent<Player>();
-        if (player != null) player.CmdUseCard(cardindex);
+        targetPlayer.CmdUseCard(_selectedCardIndex);
         _selectedCardIndex = -1;
         if (confirmButtonGO != null) confirmButtonGO.SetActive(false);
     }
 
-    [ContextMenu("Refresh All Card View")]
-    public void RefreshAllCardMenu()
+    // カードをクリックしたときの選択処理(同じカードを再度押すと選択解除)
+    public void SelectCard(int cardindex)
     {
-        List<bool> a = new(10);
-        for (int i = 0; i < 10; i++) a.Add(i % 2 == 0);
-        RefreshAllCardView(a, 5);
+        var targetPlayer = GetDebugOrLocalPlayer();
+        if (targetPlayer == null || targetPlayer.isReadytoTurn) return;
+        if (cardindex < 0 || cardindex >= targetPlayer.used.Count) return;
+        if (targetPlayer.used[cardindex]) return; // 使用済みは選べない
+
+        _selectedCardIndex = (cardindex == _selectedCardIndex) ? -1 : cardindex;
+        if (confirmButtonGO != null) confirmButtonGO.SetActive(_selectedCardIndex >= 0);
+        RefreshMyCardView(targetPlayer.used.ToList(), targetPlayer.used.Count);
+    }
+
+    [Client]
+    public void RefreshMyCardView(List<bool> used, int cnt)
+    {
+        try { RefreshMyCardViewInternal(used, cnt); }
+        catch (System.Exception ex) { Debug.LogError("RefreshMyCardView失敗: " + ex); }
+    }
+
+    private void RefreshMyCardViewInternal(List<bool> used, int cnt)
+    {
+        if (myCardParent == null || cardUI == null) return;
+
+        while (myCardParent.transform.childCount < cnt)
+        {
+            var card = Instantiate(cardUI, myCardParent.transform);
+            int index = myCardParent.transform.childCount - 1;
+            var numUI = card.GetComponent<NumberCardUI>();
+            numUI.Setup(index + 1);
+            var btn = card.GetComponent<UnityEngine.UI.Button>();
+            if (btn != null)
+            {
+                int captured = index;
+                btn.onClick.RemoveAllListeners();
+                btn.onClick.AddListener(() => SelectCard(captured));
+            }
+        }
+
+        // 1行に何枚並ぶかを幅から決める。入らなければ行を増やす。
+        var layout = CalcCardLayout(cnt, MY_CARD_SCALE_MAX, RowMaxWidth);
+        // 確定ボタンを手札の実際の高さに合わせて配置するため、行数を共有する
+        ResponsiveCanvasScaler.MyCardRowCountForLayout = layout.rows;
+
+        for (int i = 0; i < myCardParent.transform.childCount; i++)
+        {
+            var child = myCardParent.transform.GetChild(i);
+            child.gameObject.SetActive(i < cnt);
+            if (i >= cnt) continue;
+
+            var rt = child.GetComponent<RectTransform>();
+            // MyCardParentはpivot下端(0.5,0)なので、アンカーもそれに揃える
+            rt.anchorMin = new Vector2(0.5f, 0f);
+            rt.anchorMax = new Vector2(0.5f, 0f);
+            rt.localScale = Vector3.one * layout.scale;
+            rt.anchoredPosition = CardSlotPosition(i, layout, upward: true);
+
+            var numUI = child.GetComponent<NumberCardUI>();
+            numUI.SetUsed(used[i]);
+            numUI.SetSelected(i == _selectedCardIndex);
+        }
     }
 
     public void RefreshAllCardView(List<bool> used_all, int cnt)
     {
-        int pcnt = used_all.Count / cnt;
+        // 描画中の例外はRpc処理を巻き込んでクライアント切断を招くため、
+        // ここで捕捉してログに残す(切断させない)。
+        try { RefreshAllCardViewInternal(used_all, cnt); }
+        catch (System.Exception ex) { Debug.LogError("RefreshAllCardView失敗: " + ex); }
+    }
 
-        // ==== レイアウト計算(ラベルとカードで共通に使う) ====
-        // 以前はラベル用とカード用で同じ計算を別々に書いていたため、片方だけ修正すると
-        // 値がズレてラベルとカードが重なる不具合を繰り返していた。ここで一度だけ計算する。
-        float canvasW = GetCanvasWidth();
+    private void RefreshAllCardViewInternal(List<bool> used_all, int cnt)
+    {
+        if (othersCardParent == null || cardUI == null) return;
+        int pcnt = used_all.Count / Mathf.Max(cnt, 1);
+        if (pcnt <= 0) return;
+
+        // 右端に「今出したカード」枠を置くため、その分だけ狭い幅で計算する
+        // === 一覧のレイアウト決定 ===
+        // 横持ちは横幅が余る一方で縦が足りない。プレイヤーを2列に並べることで
+        // 必要な縦の量が半分になり、その分カードを大きくできる。
+        //   A    E
+        //   B    F
+        //   C    G
+        //   D    H
+        bool isPortraitOthers = ResponsiveCanvasScaler.IsPortraitMode;
+        int columns = (!isPortraitOthers && pcnt >= 3) ? 2 : 1;
+        int rowsOfPlayers = Mathf.CeilToInt((float)pcnt / columns);
+
+        // 1列あたりに使える幅。2列なら半分に、さらに列間の余白を引く。
+        float colGap = 60f;
+        float widthPerColumn = (RowMaxWidth - colGap * (columns - 1)) / columns;
+        // 各列の中で「今出したカード」枠の分も確保する
+        float cardsWidthPerColumn = widthPerColumn - 150f;
+
+        var layout = CalcCardLayout(cnt, OTHERS_CARD_SCALE_MAX, cardsWidthPerColumn, singleRow: true);
+
+        // 一覧が使える高さ = 画面高 - 上部固定要素 - 手札領域 - 余白
         float canvasH = GetCanvasHeight();
-        // 左右マージン分を差し引く。履歴パネルが常駐している場合はその分も除く。
-        // さらに、右端に「今出したカード」枠(カード1枚分+間隔)を置くための幅も確保する。
-        // 固定160だと画面によっては右端ギリギリになるため、やや広めに取る。
-        float availableWidth = Mathf.Max(150f, canvasW * ResponsiveCanvasScaler.AvailableGameWidthRatio - 100f - 220f);
-        bool isPortrait = ResponsiveCanvasScaler.IsPortraitMode;
-        float expectedRows = isPortrait ? 4f : 2f;
-        float heightCap = (canvasH * (isPortrait ? 0.25f : 0.18f) * ResponsiveCanvasScaler.VerticalCompressionScale / expectedRows) / 160f * 110f;
+        float topReserved = 230f;
+        int myRows = Mathf.Max(1, ResponsiveCanvasScaler.MyCardRowCountForLayout);
+        float myCardsReserved = 40f + 145f * myRows + 100f;
+        float othersAllowedH = Mathf.Max(200f, canvasH - topReserved - myCardsReserved - 20f);
 
-        // 枚数が多い場合は複数行に折り返す(1枚あたり最低限の幅を確保して数字を読めるようにする)。
-        // 横持ちは縦が狭く横に余裕があるため、折り返して行数を増やすより
-        // 「横幅を使い切って1行に収める」方が有利(行が増えると縦を圧迫するため)。
-        // 実際、WXGAでは使用可能幅1046pxに対し429px(31%)しか使わずに折り返していた。
-        float desiredSpacing = isPortrait ? 60f : 45f;
-        int desiredPerRow = Mathf.Max(1, Mathf.FloorToInt(availableWidth / desiredSpacing));
-        int maxSubRows = isPortrait ? 3 : 2; // 横持ちは縦が厳しいので行数を抑える
-        int subRows = Mathf.Clamp(Mathf.CeilToInt((float)cnt / desiredPerRow), 1, maxSubRows);
-        int perRow = Mathf.CeilToInt((float)cnt / subRows);
+        float labelH = Mathf.Clamp(othersAllowedH / rowsOfPlayers * 0.22f, 24f, 46f);
+        // ラベルとカードの間隔。ブロック高の計算とカード配置で同じ値を使うこと
+        // ラベル下端とカード上端の隙間。
+        // カードはpivot中心なので、配置基準から CARD_H*scale*0.5 下がった位置が中心になる。
+        // そのぶんを差し引かないと、実際の隙間が想定よりずっと広くなり、
+        // ラベルが「自分のカード」より「上のプレイヤーのカード」に近づいてしまう。
+        const float LABEL_CARD_GAP = 6f;
+        // 1人分の縦占有。
+        // カードはラベル下端から (labelH + GAP) 下を基準に、中心が CARD_H*scale*0.5 下に来る。
+        // つまりカード下端は基準から CARD_H*scale だけ下。行数分ぶん積む。
+        // 以前はこの「中心基準で半分ずつ広がる」分を計上しておらず、
+        // 次のプレイヤーのラベルが前のプレイヤーのカードに50px食い込んでいた。
+        // 1人分の縦占有 = ラベル + 隙間 + カード行 + プレイヤー間の区切り余白。
+        // 区切り余白(28)はラベル-カード間の隙間(6)より明確に広くすることで、
+        // 「ラベルは自分のカードに属する」と視覚的に分かるようにする。
+        float PlayerBlockHeight(float lh, CardLayout lay) =>
+            lh + LABEL_CARD_GAP + lay.rows * (CARD_H * lay.scale + 6f) + 28f;
+        float playerBlockH = PlayerBlockHeight(labelH, layout);
 
-        // 幅から決まる間隔。heightCapで抑えると横の余白を活かせないため、
-        // 幅の余裕がある場合はそちらを優先する。
-        float widthSpacing = availableWidth / Mathf.Max(perRow, 1);
-        float spacing = Mathf.Min(130f, isPortrait ? Mathf.Min(heightCap, widthSpacing) : widthSpacing);
-        // 高さ圧縮が強い画面ではscaleが0.26まで落ちて数字が8pxとなり判読不能だったため下限を設ける。
-        // ただし固定0.6にすると、縦が非常に狭い画面(WXGAで20枚×2人など)では
-        // 一覧が画面高を超えて手札と重なってしまう。
-        // そこで「一覧に使ってよい高さ」から逆算した上限も考慮し、両者の折り合いを取る。
-        // 上部の余白配分を減らした分、一覧に高さを回して読めるサイズを確保する
-        float allowedTotalHeight = canvasH * (isPortrait ? 0.42f : 0.46f);
-        // 1プレイヤー分の高さ = 140*scale*subRows + 余白 + ラベル。これがallowed/pcnt以内に収まるscale上限
-        float perPlayerAllowed = allowedTotalHeight / Mathf.Max(pcnt, 1);
-        float scaleCapByHeight = Mathf.Max(0.34f, (perPlayerAllowed - 60f) / (140f * Mathf.Max(subRows, 1)));
-        float scale = Mathf.Clamp(Mathf.Max(0.5f * (spacing / 55f), Mathf.Min(0.6f, scaleCapByHeight)), 0.34f, 1.8f);
-        // NumberCardUIのネイティブ高さは約140。実際の描画高さはこれにscaleを掛けた値になる。
-        // 以前は 80/0.5*scale という別の式を使っていたため実高さと合わず、行が重なっていた。
-        float cardRowH = 140f * scale;
-        // scaleを高さ制約側で引き上げた場合、幅由来のspacingのままだとカード同士が
-        // 重なって隙間なく詰まって見える。カード幅(90*scale)+余白を最低間隔として確保し、
-        // それで横幅に収まらない場合は逆にscaleを下げて辻褄を合わせる。
-        float neededSpacing = 90f * scale + 6f;
-        if (neededSpacing * perRow > availableWidth)
+        // 縦に並ぶのは rowsOfPlayers 行分。収まるまで反復して縮める。
+        for (int attempt = 0; attempt < 8; attempt++)
         {
-            scale = Mathf.Max(0.3f, (availableWidth / perRow - 6f) / 90f);
-            cardRowH = 140f * scale;
-            neededSpacing = 90f * scale + 6f;
-        }
-        spacing = Mathf.Max(spacing, neededSpacing);
-        // ラベルは補助情報なので、主役であるカードより大きくならないようにする。
-        // 以前は画面サイズから独立に決めていたため、カード高さ123pxに対しラベル69px(56%)と
-        // 主従が逆転して見えていた。カード高さの約35%を上限とする。
-        float labelFontMax = Mathf.Clamp(cardRowH * 0.35f, 22f, 48f);
-        float labelHeight = labelFontMax * 1.4f; // 1行分
-
-        // 1プレイヤー分の縦占有 = (カード実高さ × サブ行数) + サブ行間の余白 + ラベル高さ + 余白
-        float rowHeight = cardRowH * subRows + (subRows - 1) * 8f + labelHeight + 24f;
-        // ラベルはそのプレイヤーの領域の最上部に配置する(pivotが中心なので半分だけ下げる)
-        float labelTopMargin = -labelHeight * 0.5f;
-
-        // 一覧全体が実際に占有する高さをレイアウト側と共有する。
-        // scale下限などで見積もりとズレると、手札と重なってしまうため実値を使う。
-        float actualTotalHeight = rowHeight * pcnt;
-        if (!Mathf.Approximately(actualTotalHeight, ResponsiveCanvasScaler.OthersActualTotalHeight))
-        {
-            ResponsiveCanvasScaler.OthersActualTotalHeight = actualTotalHeight;
-            var scalerForOthers = GameObject.Find("Canvas")?.GetComponent<ResponsiveCanvasScaler>();
-            if (scalerForOthers != null) scalerForOthers.ReapplyLayout();
+            float needed = playerBlockH * rowsOfPlayers;
+            if (needed <= othersAllowedH) break;
+            float shrink = Mathf.Max(0.7f, othersAllowedH / needed);
+            layout.scale = Mathf.Max(0.22f, layout.scale * shrink);
+            layout.rowPitch = CARD_H * layout.scale + 6f;
+            layout.spacing = CARD_W * layout.scale + 6f;
+            labelH = Mathf.Max(20f, labelH * shrink);
+            playerBlockH = PlayerBlockHeight(labelH, layout);
+            if (layout.scale <= 0.221f && labelH <= 20.1f) break;
         }
 
-        // ==== ラベル ====
+        // 各列の中心X。1列なら0、2列なら左右に振り分ける。
+        float ColumnCenterX(int playerIndex)
+        {
+            if (columns == 1) return 0f;
+            int col = playerIndex / rowsOfPlayers; // 左列を上から詰め、次に右列
+            return (col == 0 ? -1f : 1f) * (widthPerColumn + colGap) * 0.5f;
+        }
+        float RowOffsetY(int playerIndex)
+        {
+            int row = playerIndex % rowsOfPlayers;
+            return -row * playerBlockH;
+        }
+
+        EnsurePlayedCardsParent();
+        var localPlayer = GetDebugOrLocalPlayer();
+        var gm = localPlayer != null ? localPlayer.gameManager : null;
+        int myId = NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1;
+
+        // --- ラベル ---
         if (othersLabelsParent != null)
         {
-            var localPlayer = GetDebugOrLocalPlayer();
-            var gm = localPlayer != null ? localPlayer.gameManager : null;
-
             while (othersLabelsParent.transform.childCount < pcnt)
             {
-                var labelGo = new GameObject("PlayerLabel" + othersLabelsParent.transform.childCount);
-                labelGo.transform.SetParent(othersLabelsParent.transform, false);
-                var newLabelRt = labelGo.AddComponent<RectTransform>();
-                newLabelRt.pivot = new Vector2(0.5f, 0.5f);
-                var newLabelTmp = labelGo.AddComponent<TextMeshProUGUI>();
-                newLabelTmp.enableAutoSizing = true;
-                newLabelTmp.fontSizeMin = 10;
-                newLabelTmp.enableWordWrapping = false;
-                newLabelTmp.overflowMode = TextOverflowModes.Truncate;
-                newLabelTmp.alignment = TextAlignmentOptions.Center;
-                newLabelTmp.color = Color.white;
+                var go = new GameObject("PlayerLabel" + othersLabelsParent.transform.childCount);
+                go.transform.SetParent(othersLabelsParent.transform, false);
+                var lrt = go.AddComponent<RectTransform>();
+                lrt.anchorMin = new Vector2(0.5f, 1f);
+                lrt.anchorMax = new Vector2(0.5f, 1f);
+                lrt.pivot = new Vector2(0.5f, 1f);
+                var tmp = go.AddComponent<TextMeshProUGUI>();
+                tmp.enableAutoSizing = true;
+                tmp.fontSizeMin = 14;
+                tmp.fontSizeMax = 40;
+                tmp.textWrappingMode = TextWrappingModes.NoWrap;
+                tmp.overflowMode = TextOverflowModes.Truncate;
+                tmp.alignment = TextAlignmentOptions.Center;
+                tmp.raycastTarget = false;
             }
-
-            int actualLocalPlayerId = NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1;
             for (int i = 0; i < othersLabelsParent.transform.childCount; i++)
             {
-                var labelChild = othersLabelsParent.transform.GetChild(i);
-                labelChild.gameObject.SetActive(i < pcnt);
+                var lc = othersLabelsParent.transform.GetChild(i);
+                lc.gameObject.SetActive(i < pcnt);
                 if (i >= pcnt) continue;
+                var lrt = lc.GetComponent<RectTransform>();
+                // カードと同じく親上端アンカーに揃える(揃えないと縦位置がずれる)
+                lrt.anchorMin = new Vector2(0.5f, 1f);
+                lrt.anchorMax = new Vector2(0.5f, 1f);
+                lrt.pivot = new Vector2(0.5f, 1f);
+                lrt.sizeDelta = new Vector2(Mathf.Min(700f, widthPerColumn * 0.95f), labelH);
+                lrt.anchoredPosition = new Vector2(ColumnCenterX(i), RowOffsetY(i));
 
-                var labelChildRt = labelChild.GetComponent<RectTransform>();
-                // 枠が小さいとautoSizeで文字が縮んで読めなくなるため、使いたいフォントサイズに合わせる
-                // 枠が広すぎると右側の「今出したカード」枠にかぶるため、
-                // 実際のカード列の幅に収まるようにする。
-                float labelBoxWidth = Mathf.Min(Mathf.Max(300f, canvasW * 0.5f), Mathf.Max(200f, (perRow - 1) * spacing));
-                labelChildRt.sizeDelta = new Vector2(labelBoxWidth, labelHeight);
-                labelChildRt.anchoredPosition = new Vector2(0, i * -rowHeight + labelTopMargin);
-
-                var labelTmp = labelChild.GetComponent<TextMeshProUGUI>();
-                labelTmp.fontSizeMax = labelFontMax;
-                int points = (gm != null && i < gm.roundWins.Count) ? gm.roundWins[i] : 0;
-                bool isMe = (i == actualLocalPlayerId);
-                // ここは横に十分な幅があり、かつ行ごとに縦に並んでいるので、
-                // 横に長くなるデメリットがない。改行せず1行で表示する。
-                labelTmp.richText = true;
-                labelTmp.text = "Player " + i + (isMe ? " (You)" : "") + "  -  " + points + " pt";
-                labelTmp.color = isMe ? new Color(1f, 0.85f, 0.25f, 1f) : Color.white;
-                labelTmp.fontStyle = isMe ? FontStyles.Bold : FontStyles.Normal;
+                var tmp = lc.GetComponent<TextMeshProUGUI>();
+                int pts = (gm != null && i < gm.roundWins.Count) ? gm.roundWins[i] : 0;
+                bool isMe = (i == myId);
+                tmp.text = "Player " + i + (isMe ? " (You)" : "") + "  -  " + pts + " pt";
+                tmp.color = isMe ? new Color(1f, 0.85f, 0.25f, 1f) : Color.white;
+                tmp.fontStyle = isMe ? FontStyles.Bold : FontStyles.Normal;
             }
         }
 
-        // ==== 「今出したカード」枠(旧RoundResultPanelの統合先) ====
-        // 各プレイヤー行の右端に、そのラウンドで出したカードを表示する。
-        // 別パネルに分けていた頃はサイズ体系がAll側とズレていたため、ここに統合して
-        // 同じscale・同じ計算で描画することで大きさを揃える。
-        var localPlayerForPick = GetDebugOrLocalPlayer();
-        var gmForPick = localPlayerForPick != null ? localPlayerForPick.gameManager : null;
-        // 「使える幅の右端」を基準にすると画面の右端まで飛んで一覧から離れすぎるため、
-        // 実際に並んでいるカード列の右端から、カード1枚分ほど間を空けた位置に置く。
-        float actualRowWidth = (perRow - 1) * spacing;
-        float playedCardX = actualRowWidth * 0.5f + spacing * 1.2f;
-
-        if (playedCardsParent == null)
-        {
-            var pcGo = new GameObject("PlayedCardsParent");
-            pcGo.transform.SetParent(othersCardParent.transform.parent, false);
-            var pcRt = pcGo.AddComponent<RectTransform>();
-            pcRt.anchorMin = new Vector2(0.5f, 1f);
-            pcRt.anchorMax = new Vector2(0.5f, 1f);
-            pcRt.pivot = new Vector2(0.5f, 1f);
-            playedCardsParent = pcGo;
-        }
-        var othersParentRt = othersCardParent.GetComponent<RectTransform>();
-        var playedParentRt = playedCardsParent.GetComponent<RectTransform>();
-        playedParentRt.anchoredPosition = othersParentRt.anchoredPosition;
-        playedCardsParent.SetActive(othersCardParent.activeSelf);
-
-        while (playedCardsParent.transform.childCount < pcnt)
-        {
-            var pc = Instantiate(cardUI, playedCardsParent.transform);
-            pc.name = "PlayedCard" + (playedCardsParent.transform.childCount - 1);
-        }
-        for (int i = 0; i < playedCardsParent.transform.childCount; i++)
-        {
-            var pcTf = playedCardsParent.transform.GetChild(i);
-            pcTf.gameObject.SetActive(i < pcnt);
-            if (i >= pcnt) continue;
-
-            var pcRt = pcTf.GetComponent<RectTransform>();
-            pcRt.localScale = new Vector3(scale, scale, scale); // All側と完全に同じスケール
-            // その行のカード群と同じ高さ(1行目の中心)に置く
-            float yForPlayed = -labelHeight - 12f - cardRowH * 0.5f;
-            pcRt.anchoredPosition = new Vector2(playedCardX, i * -rowHeight + yForPlayed);
-
-            var pcNum = pcTf.GetComponent<NumberCardUI>();
-            var pl = (gmForPick != null && i < gmForPick.room.playerComponents.Count) ? gmForPick.room.playerComponents[i] : null;
-            if (pl != null && pl.isReadytoTurn)
-            {
-                pcNum.SetupDisplay("?"); // 提出済みだが未公開
-            }
-            else
-            {
-                int revealed = (gmForPick != null && i < gmForPick.lastRevealedPicks.Count) ? gmForPick.lastRevealedPicks[i] : 0;
-                pcNum.SetupDisplay(revealed > 0 ? revealed.ToString() : "-");
-            }
-        }
-
-        // ==== カード ====
+        // --- 使用済みカード ---
         for (int i = 0; i < pcnt; i++)
         {
             for (int j = 0; j < cnt; j++)
             {
-                if (othersCardParent.transform.childCount <= i * cnt + j)
+                int flat = i * cnt + j;
+                if (othersCardParent.transform.childCount <= flat)
                 {
-                    var card = Instantiate(cardUI, new Vector3(), Quaternion.identity, othersCardParent.transform);
-                    var numUI = card.GetComponent<NumberCardUI>();
-                    numUI.Setup(j + 1);
+                    var card = Instantiate(cardUI, othersCardParent.transform);
+                    card.GetComponent<NumberCardUI>().Setup(j + 1);
+                    var b = card.GetComponent<UnityEngine.UI.Button>();
+                    if (b != null) b.interactable = false;
                 }
-                var othersChild = othersCardParent.transform.GetChild(i * cnt + j);
-                othersChild.gameObject.SetActive(true);
-                var rT = othersChild.GetComponent<RectTransform>();
-                rT.localScale = new Vector3(scale, scale, scale);
-
-                int subRow = j / perRow;
-                int col = j % perRow;
-                int cardsInThisSubRow = Mathf.Min(perRow, cnt - subRow * perRow);
-                float centeredX = col * spacing - (cardsInThisSubRow - 1) * spacing * 0.5f;
-                // ラベルの下から各サブ行を積む
-                // ラベル(高さlabelHeight)の下から余白を空けてカードを積む。
-                // カードのpivotも中心なので、行の中心位置を指定する。
-                float yInPlayer = -labelHeight - 12f - subRow * (cardRowH + 8f) - cardRowH * 0.5f;
-                rT.anchoredPosition = new Vector3(centeredX, i * -rowHeight + yInPlayer, 0);
+                var oc = othersCardParent.transform.GetChild(flat);
+                oc.gameObject.SetActive(true);
+                var rt = oc.GetComponent<RectTransform>();
+                // アンカーを親の上端(0.5,1)に揃える。
+                // プレハブ既定の(0.5,0.5)のままだと、親の高さ(100)の半分だけ
+                // 位置が下にずれ、ラベルとの間隔が50px広がってしまう。
+                rt.anchorMin = new Vector2(0.5f, 1f);
+                rt.anchorMax = new Vector2(0.5f, 1f);
+                rt.localScale = Vector3.one * layout.scale;
+                Vector2 p = CardSlotPosition(j, layout, upward: false);
+                // p.y には既に -CARD_H*scale*0.5 (カード中心へのオフセット)が含まれる。
+                // ラベル下端(RowOffsetY - labelH)から GAP だけ空けた位置がカード上端になる。
+                rt.anchoredPosition = new Vector2(
+                    p.x + ColumnCenterX(i),
+                    p.y + RowOffsetY(i) - labelH - LABEL_CARD_GAP);
+                oc.GetComponent<NumberCardUI>().SetUsed(used_all[flat]);
             }
         }
+        for (int i = pcnt * cnt; i < othersCardParent.transform.childCount; i++)
+            othersCardParent.transform.GetChild(i).gameObject.SetActive(false);
 
-        for (int i = 0; i < pcnt * cnt; i++)
+        // --- 今出したカード(各行の右端) ---
+        // 「今出したカード」は各プレイヤーのカード列の右隣に置く
+        RefreshPlayedCards(pcnt, layout, labelH, LABEL_CARD_GAP, gm,
+            ColumnCenterX, RowOffsetY);
+    }
+
+    // カード列のレイアウト結果
+    private struct CardLayout
+    {
+        public float scale;
+        public int perRow;
+        public int rows;
+        public float spacing;
+        public float rowPitch;
+    }
+
+    // 幅に収まる枚数から、スケールと行数を決める。
+    // 収まらない場合は行を増やす(縮めて押し込まない)。
+    // カード列のレイアウトを決める。
+    // singleRow=true の場合は「必ず1行に収める」ことを優先し、
+    // 入らなければスケールを下げる。
+    // (使用済み一覧は人数分だけ縦に積むため、行数が増えると縦を大きく圧迫する。
+    //  6人x15枚のようなケースでは、多少小さくしてでも1行にした方が全体が収まる)
+    private CardLayout CalcCardLayout(int cnt, float maxScale, float availableWidth, bool singleRow = false)
+    {
+        var r = new CardLayout();
+        r.scale = maxScale;
+
+        if (singleRow)
         {
-            int playerIndex = i / cnt;
-            int cardIndex = i % cnt;
-            othersCardParent.transform.GetChild(playerIndex * cnt + cardIndex).GetComponent<NumberCardUI>().SetUsed(used_all[i]);
+            r.perRow = cnt;
+            r.rows = 1;
+            // cnt枚が availableWidth に収まるスケールを求める
+            float needPitch = availableWidth / Mathf.Max(cnt, 1);
+            float fitScale = (needPitch - 6f) / CARD_W;
+            r.scale = Mathf.Clamp(Mathf.Min(maxScale, fitScale), 0.3f, maxScale);
+            r.spacing = CARD_W * r.scale + 6f;
+            r.rowPitch = CARD_H * r.scale + 8f;
+            return r;
         }
 
-        // カード枚数が以前より減った場合、余分な古いカードが残らないよう非表示にする
-        for (int i = pcnt * cnt; i < othersCardParent.transform.childCount; i++)
+        float pitch = CARD_W * r.scale + 10f;
+        r.perRow = Mathf.Max(1, Mathf.FloorToInt(availableWidth / pitch));
+        if (r.perRow >= cnt)
         {
-            othersCardParent.transform.GetChild(i).gameObject.SetActive(false);
+            r.perRow = cnt;
+        }
+        else
+        {
+            // 行数を均等に割る
+            int need = Mathf.CeilToInt((float)cnt / r.perRow);
+            r.perRow = Mathf.CeilToInt((float)cnt / need);
+        }
+        r.rows = Mathf.CeilToInt((float)cnt / r.perRow);
+        r.spacing = pitch;
+        r.rowPitch = CARD_H * r.scale + 8f;
+        return r;
+    }
+
+    // index番目のカードの位置(親のpivot基準)。
+    // upward=true なら下から上へ積む(手札)、false なら上から下へ積む(一覧)。
+    private Vector2 CardSlotPosition(int index, CardLayout layout, bool upward)
+    {
+        int row = index / layout.perRow;
+        int col = index % layout.perRow;
+        int inThisRow = Mathf.Min(layout.perRow, 999);
+        float x = (col - (inThisRow - 1) * 0.5f) * layout.spacing;
+        float y = upward
+            ? (layout.rows - 1 - row) * layout.rowPitch + CARD_H * layout.scale * 0.5f
+            : -(row * layout.rowPitch) - CARD_H * layout.scale * 0.5f;
+        return new Vector2(x, y);
+    }
+
+    private void EnsurePlayedCardsParent()
+    {
+        if (playedCardsParent != null) return;
+
+        // OthersCardParentの子にすると、カードをindexで走査する処理が
+        // この管理用オブジェクトを掴んでしまいNullReferenceになる。
+        // そのため兄弟として作り、位置だけ毎回OthersCardParentに合わせる。
+        var staleChild = othersCardParent.transform.Find("PlayedCardsParent");
+        if (staleChild != null) DestroyImmediate(staleChild.gameObject);
+
+        var existing = othersCardParent.transform.parent?.Find("PlayedCardsParent");
+        if (existing != null)
+        {
+            playedCardsParent = existing.gameObject;
+            return;
+        }
+        var go = new GameObject("PlayedCardsParent");
+        go.transform.SetParent(othersCardParent.transform.parent, false);
+        go.AddComponent<RectTransform>();
+        playedCardsParent = go;
+    }
+
+    // 各プレイヤー行の右端に「今出したカード」を表示する
+    // 各プレイヤーのカード列の右隣に「今出したカード」を表示する
+    private void RefreshPlayedCards(int pcnt, CardLayout layout, float labelH, float labelGap,
+        GameManager gm, System.Func<int, float> columnCenterX, System.Func<int, float> rowOffsetY)
+    {
+        if (playedCardsParent == null) return;
+        playedCardsParent.SetActive(othersCardParent.activeSelf);
+
+        // 兄弟オブジェクトなので、OthersCardParentと同じ座標系になるよう毎回同期する
+        var ocRt = othersCardParent.GetComponent<RectTransform>();
+        var pcRt = playedCardsParent.GetComponent<RectTransform>();
+        pcRt.anchorMin = ocRt.anchorMin;
+        pcRt.anchorMax = ocRt.anchorMax;
+        pcRt.pivot = ocRt.pivot;
+        pcRt.anchoredPosition = ocRt.anchoredPosition;
+
+        while (playedCardsParent.transform.childCount < pcnt)
+        {
+            var pc = Instantiate(cardUI, playedCardsParent.transform);
+            var b = pc.GetComponent<UnityEngine.UI.Button>();
+            if (b != null) b.interactable = false;
+        }
+
+        float rowW = (layout.perRow - 1) * layout.spacing;
+
+        for (int i = 0; i < playedCardsParent.transform.childCount; i++)
+        {
+            var c = playedCardsParent.transform.GetChild(i);
+            c.gameObject.SetActive(i < pcnt);
+            if (i >= pcnt) continue;
+
+            var rt = c.GetComponent<RectTransform>();
+            // 使用済みカードと同じく親上端アンカーに揃える
+            rt.anchorMin = new Vector2(0.5f, 1f);
+            rt.anchorMax = new Vector2(0.5f, 1f);
+            rt.localScale = Vector3.one * layout.scale;
+            rt.anchoredPosition = new Vector2(
+                columnCenterX(i) + rowW * 0.5f + layout.spacing,
+                rowOffsetY(i) - labelH - labelGap - CARD_H * layout.scale * 0.5f);
+
+            var num = c.GetComponent<NumberCardUI>();
+            // gm.roomはクライアント側では未同期のことがあるためnullチェックが必須。
+            var pl = (gm != null && gm.room != null && i < gm.room.playerComponents.Count)
+                ? gm.room.playerComponents[i] : null;
+            int revealed = (gm != null && i < gm.lastRevealedPicks.Count) ? gm.lastRevealedPicks[i] : 0;
+
+            if (revealed > 0)
+            {
+                num.SetupDisplay(revealed.ToString());
+                num.SetSelected(false);
+            }
+            else if (pl != null && pl.isReadytoTurn)
+            {
+                // 提出済みだが未公開: 選択済みと分かるようハイライトする
+                num.SetupDisplay("?");
+                num.SetSelected(true);
+            }
+            else
+            {
+                num.SetupDisplay("-");
+                num.SetSelected(false);
+            }
         }
     }
+
+
 
     public void ShowResult(string message)
     {
@@ -977,6 +1095,8 @@ var numUI = child.GetComponent<NumberCardUI>();
         var text = panel.Find("GameOverText")?.GetComponent<TMP_Text>();
         if (text != null) text.text = message;
 
+        // 全画面オーバーレイなので最前面に出す
+        panel.SetAsLastSibling();
         panel.gameObject.SetActive(true);
     }
 
@@ -997,7 +1117,12 @@ var numUI = child.GetComponent<NumberCardUI>();
     public void ButtonToggleHistory()
     {
         var panel = FindHistoryPanel();
-        if (panel != null) panel.gameObject.SetActive(!panel.gameObject.activeSelf);
+        if (panel == null) return;
+        bool willShow = !panel.gameObject.activeSelf;
+        // オーバーレイなので、開くときは最前面に持ってくる
+        // (他の要素が上に重なると、背景が透けているように見えてしまう)
+        if (willShow) panel.SetAsLastSibling();
+        panel.gameObject.SetActive(willShow);
     }
 
     // 新しいゲーム開始時に、前回のゲームの履歴が残ったままにならないようクリアする
@@ -1071,7 +1196,7 @@ var numUI = child.GetComponent<NumberCardUI>();
         badgeTmp.fontSizeMin = 10;
         badgeTmp.fontSizeMax = Mathf.Clamp(canvasH * 0.02f, 20f, 36f);
         badgeTmp.fontStyle = FontStyles.Bold;
-        badgeTmp.enableWordWrapping = false;
+        badgeTmp.textWrappingMode = TextWrappingModes.NoWrap;
         badgeTmp.overflowMode = TextOverflowModes.Truncate;
         badgeTmp.alignment = TextAlignmentOptions.Center;
         badgeTmp.color = Color.white;
@@ -1086,7 +1211,7 @@ var numUI = child.GetComponent<NumberCardUI>();
         float cardsAreaWidth = Mathf.Max(40f, panelWidth - cardsAreaStart - resultTextWidth - 24f);
 
         int cardCountInRow = Mathf.Max(1, playedCards.Count);
-        float cardScaleByHeight = (rowHeight * 0.88f) / 140f;
+        float cardScaleByHeight = (rowHeight * 0.88f) / CARD_H;
         float cardScaleByWidth = (cardsAreaWidth / cardCountInRow) / 95f; // 95 = カード幅90 + 最小間隔
         float cardScale = Mathf.Min(cardScaleByHeight, cardScaleByWidth);
         float cardSpacing = 90f * cardScale + 4f;
@@ -1120,7 +1245,7 @@ var numUI = child.GetComponent<NumberCardUI>();
         resultTmp.enableAutoSizing = true;
         resultTmp.fontSizeMin = 12;
         resultTmp.fontSizeMax = Mathf.Clamp(canvasH * 0.018f, 18f, 32f);
-        resultTmp.enableWordWrapping = false;
+        resultTmp.textWrappingMode = TextWrappingModes.NoWrap;
         resultTmp.overflowMode = TextOverflowModes.Truncate;
         resultTmp.alignment = TextAlignmentOptions.MidlineRight;
         resultTmp.color = tie ? new Color(0.8f, 0.8f, 0.8f, 1f) : new Color(1f, 0.85f, 0.25f, 1f);
@@ -1157,7 +1282,7 @@ var numUI = child.GetComponent<NumberCardUI>();
         if (localPlayer == null || localPlayer.gameManager == null) return;
 
         var gm = localPlayer.gameManager;
-        var players = FindObjectsOfType<Player>()
+        var players = FindObjectsByType<Player>(UnityEngine.FindObjectsSortMode.None)
             .Where(p => p.gameManager == gm)
             .OrderBy(p => p.playerId)
             .ToList();
@@ -1167,7 +1292,7 @@ float canvasWidthForResults = GetCanvasWidth();
         // パネル幅・スロット間隔の上限を固定値(480/110)にすると、画面が広くてもそれ以上大きくならなかったため、
         // 画面幅に応じて上限自体を引き上げる。
 // 履歴パネルが右側に常駐している場合は、その分だけ結果パネルの幅を狭めて重ならないようにする
-float maxPanelWidth = canvasWidthForResults * 0.6f * ResponsiveCanvasScaler.AvailableGameWidthRatio;
+float maxPanelWidth = canvasWidthForResults * 0.6f;
         var panelRt = roundResultPanel.GetComponent<RectTransform>();
         panelRt.sizeDelta = new Vector2(maxPanelWidth, panelRt.sizeDelta.y);
 
@@ -1206,7 +1331,7 @@ float maxPanelWidth = canvasWidthForResults * 0.6f * ResponsiveCanvasScaler.Avai
             labelTmp.enableAutoSizing = true;
             labelTmp.fontSizeMin = 9;
             labelTmp.fontSizeMax = Mathf.Clamp(Mathf.Min(GetCanvasWidth(), GetCanvasHeight() * 1.6f) * 0.018f, 32f, 60f); // 画面連動
-            labelTmp.enableWordWrapping = false;
+            labelTmp.textWrappingMode = TextWrappingModes.NoWrap;
             labelTmp.overflowMode = TextOverflowModes.Truncate;
             labelTmp.alignment = TextAlignmentOptions.Center;
             labelTmp.color = Color.white;
@@ -1245,7 +1370,7 @@ float maxPanelWidth = canvasWidthForResults * 0.6f * ResponsiveCanvasScaler.Avai
             // (You)を改行して2行にするため、高さは2行分確保する
             labelRtLive.sizeDelta = new Vector2(labelWidthLive, slotLabelFontMaxLive * 2.4f);
             label.fontSizeMax = slotLabelFontMaxLive;
-            label.enableWordWrapping = false;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
 
             // 「(You)」は改行した上で小さく表示する。横に並べたまま縮小しても幅は詰まらないため、
             // 改行することで幅を抑えつつ、2行目が縦に長くなりすぎないようサイズも落とす。

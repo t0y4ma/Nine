@@ -17,8 +17,10 @@ public class myNetworkManager : NetworkManager
     // WebGL版が自動接続する本番サーバーのアドレス(Caddy経由でwssを待ち受ける)
     private const string ProductionServerAddress = "nine.freeddns.org";
 
-    private void Start()
+    // NetworkManager.Start()を隠蔽すると基底の初期化が走らなくなるため、overrideする
+    public override void Start()
     {
+
         // Unity Editorでは、スクリプトの再コンパイルを挟まないPlay→Stop→Playのサイクルにおいて、
         // MirrorのNetworkServer.active/NetworkClient.active等の静的フラグが正しくリセットされず
         // 次のセッションに引き継がれてしまうことがある(原因はまだ特定できていないが、繰り返し
@@ -31,6 +33,10 @@ public class myNetworkManager : NetworkManager
             Debug.LogWarning("myNetworkManager.Start(): NetworkServer/Client が予期せずactiveな状態で起動しました。強制的にリセットします。");
             StopHost();
         }
+
+        // 状態をクリーンにしてから基底の初期化を行う。
+        // (base.Start()を先に呼ぶと、初期化済みの状態をStopHost()で壊してしまう)
+        base.Start();
 
         ConfigureWebGLTransport();
 

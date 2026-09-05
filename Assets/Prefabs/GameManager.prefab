@@ -50,6 +50,11 @@ MonoBehaviour:
   syncMode: 0
   syncInterval: 0
   CARDCOUNT: 9
+  ScoringMode: 0
+  MaxPlayers: 6
+  inProgress: 0
+  readyCount: 0
+  totalPlayerCount: 0
 --- !u!114 &1267727593844725392
 MonoBehaviour:
   m_ObjectHideFlags: 0

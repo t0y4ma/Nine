@@ -21,9 +21,17 @@ public class GameManager : NetworkBehaviour
     private const float ROUND_TIME_CHMIN = 3f; // 全員が確定した後、残り時間をこの秒数まで短縮する
     private const float ROUND_TIME_SEND_INTERVAL = 0.1f;
 
+    // カード枚数の上限。「ハゲタカの餌食」(15枚)を包摂できる範囲とする。
+    // これ以上増やすと、人数が多い場合に使用済み一覧が判読不能な大きさまで縮む。
+    public const int CARD_COUNT_LIMIT = 15;
     [SyncVar] public int CARDCOUNT = 9;
     [SyncVar] public int ScoringMode = 0; // 0=ラウンド勝利で1pt、1=相手が出したカード数字の合計をpt
-    [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int MaxPlayers = 8; // 部屋の参加人数上限
+    // 部屋の参加人数上限。
+    // 「ハゲタカの餌食」(15枚・最大6人)を包摂できる範囲とする。
+    // これ以上増やすと使用済みカード一覧が画面に収まらず判読できなくなる
+    // (8人x20枚では必要高さ4836pxに対し画面高2160pxで完全に破綻していた)。
+    public const int MAX_PLAYERS_LIMIT = 6;
+    [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int MaxPlayers = MAX_PLAYERS_LIMIT;
     [SyncVar(hook = nameof(OnInProgressChanged))] public bool inProgress;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int readyCount;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int totalPlayerCount;
@@ -77,11 +85,11 @@ public class GameManager : NetworkBehaviour
     public void UpdateSettings(int newCardCount, int newScoringMode, int newMaxPlayers)
     {
         if (inProgress) return;
-        newCardCount = Mathf.Clamp(newCardCount, 3, 20);
+        newCardCount = Mathf.Clamp(newCardCount, 3, CARD_COUNT_LIMIT);
         newScoringMode = Mathf.Clamp(newScoringMode, 0, 1);
         // 上限は、既に参加している人数を下回らないようにする(既存プレイヤーが弾き出されないため)
         int currentPlayerCount = room != null ? room.playerComponents.Count : 0;
-        newMaxPlayers = Mathf.Clamp(newMaxPlayers, Mathf.Max(2, currentPlayerCount), 20);
+        newMaxPlayers = Mathf.Clamp(newMaxPlayers, Mathf.Max(2, currentPlayerCount), MAX_PLAYERS_LIMIT);
 
         CARDCOUNT = newCardCount;
         ScoringMode = newScoringMode;
@@ -171,6 +179,8 @@ public class GameManager : NetworkBehaviour
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.ShowRoundCutIn(roundNumber, totalRounds);
+        // 前ラウンドの結果表示が残り続けないよう、新しいラウンドの開始時にクリアする
+        uiManager?.ShowResult("");
     }
 
     // ラウンドの制限時間を管理する。全員が確定した時点で残り時間をROUND_TIME_CHMIN秒まで短縮し、

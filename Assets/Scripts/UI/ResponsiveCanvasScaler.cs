@@ -87,6 +87,18 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         finally { _reapplying = false; }
     }
 
+    // 設計上の基準解像度。この解像度でレイアウトが成立するように組み、
+    // 他の解像度へはCanvasScalerが自動で拡大縮小する。
+    // 手札が実際に何行に折り返されているか。UIEventsManagerが描画時に設定する。
+    // 確定ボタンの位置を、手札の実際の高さに合わせるために使う。
+    public static int MyCardRowCountForLayout { get; set; } = 1;
+
+    private static readonly Vector2 REFERENCE_RESOLUTION_LANDSCAPE = new Vector2(1920f, 1080f);
+    // 縦持ちは基準解像度自体を縦長にする。
+    // 横持ち用の1920x1080のまま幅基準にすると、Canvas高さが4000超になり
+    // 1080基準で組んだ要素が相対的に極端に小さくなってしまう。
+    private static readonly Vector2 REFERENCE_RESOLUTION_PORTRAIT = new Vector2(1080f, 1920f);
+
     private void ApplyMatch()
     {
         var canvasSize = GetActualCanvasSize();
@@ -98,661 +110,411 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         bool isPortrait = height >= width;
         IsPortraitMode = isPortrait;
 
-        // 参照解像度を実際の画面解像度そのものにする -> scaleFactorは常に1。
-        // 機種を推測する必要が一切なくなり、あらゆる解像度で連続的に破綻なく動く。
-        scaler.referenceResolution = new Vector2(width, height);
+        // === CanvasScalerを本来の用途で使う ===
+        // 以前はreferenceResolutionを実画面サイズに毎フレーム書き換えていたため
+        // scaleFactorが常に1になり、CanvasScalerのスケーリングが無効化されていた。
+        // その結果、本来CanvasScalerが自動でやる拡大縮小を全要素ぶん手計算する
+        // 羽目になり、二重計算・循環依存・解像度ごとの個別調整の温床になっていた。
+        //
+        // 参照解像度は固定にして、スケーリングはCanvasScalerに任せる。
+        scaler.referenceResolution = isPortrait ? REFERENCE_RESOLUTION_PORTRAIT : REFERENCE_RESOLUTION_LANDSCAPE;
+        // 縦横比に応じて基準軸を切り替える。
+        // 横持ち(縦が狭い)は高さ基準に寄せ、縦持ち(横が狭い)は幅基準に寄せることで、
+        // どちらの向きでも「狭い方の軸」からはみ出さないようにする。
+        // どちらの向きでも「基準解像度に対して縦横比がずれた分」を両軸で吸収する。
+        // 0.5にすることで、極端に細長い画面でも要素が小さくなりすぎない。
         scaler.matchWidthOrHeight = 0.5f;
 
+        // ロビー画面とゲーム画面のレイアウトを両方適用する。
+        // (表示/非表示は各パネル側が制御するため、常に両方の座標を更新しておく)
         ApplyOrientationLayout(isPortrait, width, height);
+        ApplyOthersLayout(isPortrait, width, height);
+        ApplyDebugPanelLayout(transform, isPortrait, width, height, 0f);
+        ApplySettingsPanelLayout(transform, isPortrait);
     }
 
+    // === ロビー画面のレイアウト ===
+    // 基準解像度(1920x1080)上で組む。他解像度へはCanvasScalerが自動でスケールする。
+    // 以前は縦持ち/横持ちで全要素の座標を二重に手計算していた(約300行)が、
+    // アンカー+縦積みの共通ルールに統一した。
     private void ApplyOrientationLayout(bool portrait, float canvasWidth, float canvasHeight)
     {
         var canvasTf = transform;
 
-        // ボタンサイズは画面の実サイズに対する割合で連続的に計算する(機種の分岐は行わない)
-        float btnWidth = Mathf.Clamp(canvasWidth * 0.24f, 160f, 420f);
-        float btnHeight = Mathf.Clamp(canvasHeight * 0.045f, 30f, 90f);
-        Vector2 btnSizePortrait = new Vector2(btnWidth, btnHeight);
-        // 高さは縦持ちと共通の式にすることで、PCとスマホでボタンの「形」が大きく変わらないようにする
-        Vector2 btnSizeLandscape = new Vector2(Mathf.Clamp(canvasWidth * 0.083f, 140f, 220f), btnHeight);
+        // 基準解像度上での寸法。縦持ちは横幅が狭いので、やや小さめのボタンにする。
+        Vector2 btnSize = portrait ? new Vector2(420f, 90f) : new Vector2(300f, 80f);
+        Vector2 inputSize = portrait ? new Vector2(420f, 90f) : new Vector2(300f, 80f);
+        float rowGap = portrait ? 105f : 95f;
 
-        float vGap = btnHeight + 8f;
+        // --- 中央の縦積みクラスタ ---
+        // 上から: 部屋一覧 / [作成・参加ボタン + 入力欄] / 接続パネル(またはロビーパネル)
+        float y = portrait ? 330f : 250f;
 
-if (portrait)
+        // 部屋一覧
+        var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
+        if (roomListRt != null)
         {
-            float clusterGap = 50f;
+            CenterAnchor(roomListRt);
+            roomListRt.sizeDelta = new Vector2(portrait ? 700f : 560f, portrait ? 300f : 240f);
+            // クラスタ上端(y + ボタン半分)から余白を空けた位置に、パネル下端が来るようにする
+            float listH = portrait ? 300f : 240f;
+            float clusterTop = y + btnSize.y * 0.5f;
+            roomListRt.anchoredPosition = new Vector2(0f, clusterTop + 30f + listH * 0.5f);
+        }
 
-            // RoomListPanel(既存の部屋一覧)を一番上に配置し、その下にRoomCreate等を続ける。
-            // ここに組み込んでいなかったため、ConnectPanel(Host/Connectボタン)と重なって
-            // クリックできなくなっていた。
-            float roomListHeight = Mathf.Clamp(canvasHeight * 0.16f, 140f, 220f);
+        // 作成/参加ボタンと入力欄を左右に並べる
+        float colGap = (portrait ? 420f : 300f) * 0.5f + 20f;
+        SetRect(canvasTf, "RoomCreate", new Vector2(-colGap, y), btnSize);
+        SetRect(canvasTf, "RoomId", new Vector2(colGap, y), inputSize);
+        SetRect(canvasTf, "RoomJoin", new Vector2(-colGap, y - rowGap), btnSize);
+        SetRect(canvasTf, "RoomPassword", new Vector2(colGap, y - rowGap), inputSize);
 
-// クラスタ全体(RoomListPanel〜BtnSettings)の合計高さを見積もり、画面の上端〜DebugPanelの
-            // 間で縦方向に中央寄せする。以前はRoomListPanelだけ座標系が異なっていたため中央寄せの
-            // 計算がズレてしまっていたが、座標系を統一したので正しく機能する。
-            float connectPanelHeightForCalc = vGap * 4f + 20f;
-            float totalClusterHeight = roomListHeight + clusterGap
-                + (btnHeight + vGap * 3f) + clusterGap
-                + connectPanelHeightForCalc + clusterGap
-                + btnHeight + (btnHeight + 12f);
+        float clusterBottom = y - rowGap - btnSize.y * 0.5f;
 
-            const float topSafeMargin = 40f;
-            const float bottomSafeMargin = 170f; // DebugPanelとの最低クリアランス
-            float availableHeight = canvasHeight - topSafeMargin - bottomSafeMargin;
-            float roomListTopOffset = topSafeMargin + Mathf.Max(0f, (availableHeight - totalClusterHeight) * 0.5f);
-            // RoomListPanel以外の要素(RoomCreate等)はすべて中央アンカーのため、RoomListPanelも
-            // 中央アンカーに統一する。以前は上端アンカーのままだったため、2つの異なる座標系が
-            // 混在してズレが生じ、意図しない大きな空白ができる原因になっていた。
-            var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
-            float roomListCenterY = canvasHeight * 0.5f - roomListTopOffset - roomListHeight * 0.5f;
-            if (roomListRt != null)
-            {
-                roomListRt.anchorMin = new Vector2(0.5f, 0.5f);
-                roomListRt.anchorMax = new Vector2(0.5f, 0.5f);
-                roomListRt.pivot = new Vector2(0.5f, 0.5f);
-                roomListRt.anchoredPosition = new Vector2(0, roomListCenterY);
-                roomListRt.sizeDelta = new Vector2(btnWidth + 60f, roomListHeight);
-            }
+        // --- 接続パネル(Host/Connect/Server) ---
+        float panelGap = 40f;
+        float connectPanelH = portrait ? 280f : 200f;
+        float connectPanelW = portrait ? 760f : 1000f;
+        float connectCenterY = clusterBottom - panelGap - connectPanelH * 0.5f;
+        SetRect(canvasTf, "ConnectPanel", new Vector2(0f, connectCenterY), new Vector2(connectPanelW, connectPanelH));
 
-            float topY = roomListCenterY - roomListHeight * 0.5f - clusterGap - btnHeight * 0.5f;
-
-            SetPos(canvasTf, "RoomCreate", new Vector2(0, topY));
-            SetSize(canvasTf, "RoomCreate", btnSizePortrait);
-            SetPos(canvasTf, "RoomJoin", new Vector2(0, topY - vGap));
-            SetSize(canvasTf, "RoomJoin", btnSizePortrait);
-            SetPos(canvasTf, "RoomId", new Vector2(0, topY - vGap * 2f));
-            SetSize(canvasTf, "RoomId", btnSizePortrait);
-            SetPos(canvasTf, "RoomPassword", new Vector2(0, topY - vGap * 3f));
-            SetSize(canvasTf, "RoomPassword", btnSizePortrait);
-            float roomClusterBottom = topY - vGap * 3f - btnHeight * 0.5f;
-
-            float connectPanelHeight = vGap * 4f + 20f;
-            float connectPanelCenterY = roomClusterBottom - clusterGap - connectPanelHeight * 0.5f;
-            SetPos(canvasTf, "ConnectPanel", new Vector2(0, connectPanelCenterY));
-            SetSize(canvasTf, "ConnectPanel", new Vector2(btnWidth + 60f, connectPanelHeight));
-            SetPos(canvasTf, "ConnectPanel/AddressInput", new Vector2(0, vGap * 1.5f));
-            SetSize(canvasTf, "ConnectPanel/AddressInput", btnSizePortrait);
-            SetPos(canvasTf, "ConnectPanel/BtnHost", new Vector2(0, vGap * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnHost", btnSizePortrait);
-            SetPos(canvasTf, "ConnectPanel/BtnConnect", new Vector2(0, -vGap * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnConnect", btnSizePortrait);
-            SetPos(canvasTf, "ConnectPanel/BtnServer", new Vector2(0, -vGap * 1.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnServer", btnSizePortrait);
-
-            float lobbyPanelHeight = vGap * 3f + 36f;
-            SetPos(canvasTf, "LobbyPanel", new Vector2(0, connectPanelCenterY));
-            SetSize(canvasTf, "LobbyPanel", new Vector2(btnWidth + 60f, lobbyPanelHeight));
-            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(0, vGap));
-            SetSize(canvasTf, "LobbyPanel/BtnReady", btnSizePortrait);
-            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0, 0));
-            SetSize(canvasTf, "LobbyPanel/ReadyStatusText", btnSizePortrait);
-            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(0, -vGap));
-            SetSize(canvasTf, "LobbyPanel/PlayerCountText", btnSizePortrait);
-
-            float lobbyPanelBottom = connectPanelCenterY - lobbyPanelHeight * 0.5f;
-            float startGameY = lobbyPanelBottom - clusterGap - btnHeight * 0.5f;
-            SetPos(canvasTf, "StartGame", new Vector2(0, startGameY));
-            SetSize(canvasTf, "StartGame", btnSizePortrait);
-
-            // BtnSettingsはStartGameのすぐ下に配置する(排他表示ではなく同時に見えるため、間隔を空ける)
-            SetPos(canvasTf, "BtnSettings", new Vector2(0, startGameY - btnHeight - 12f));
-            SetSize(canvasTf, "BtnSettings", btnSizePortrait);
+        if (portrait)
+        {
+            // 縦持ち: 3段に積む
+            SetRect(canvasTf, "ConnectPanel/AddressInput", new Vector2(0f, 85f), inputSize);
+            SetRect(canvasTf, "ConnectPanel/BtnHost", new Vector2(-115f, -20f), new Vector2(220f, 80f));
+            SetRect(canvasTf, "ConnectPanel/BtnConnect", new Vector2(115f, -20f), new Vector2(220f, 80f));
+            SetRect(canvasTf, "ConnectPanel/BtnServer", new Vector2(0f, -110f), new Vector2(220f, 80f));
         }
         else
         {
-            // 横持ちのロビークラスタは、以前は固定ピクセル値(200や-50など)で配置しており、
-            // 4K等の非常に大きい画面ではボタン自体が上限近くまで大きくなるため固定値では
-            // 足りず重なりが発生していた。実際のボタンサイズ(btnSizeLandscape)から
-            // 動的に間隔を計算する方式に変更する。
-            float hGap = btnSizeLandscape.x + 40f; // 横並びの中心間隔
-            float vGap2 = btnSizeLandscape.y + 20f; // 縦並びの中心間隔
-
-            // Room作成/参加クラスタを2x2グリッドで配置
-            SetPos(canvasTf, "RoomCreate", new Vector2(-hGap * 0.5f, vGap2 * 0.5f));
-            SetSize(canvasTf, "RoomCreate", btnSizeLandscape);
-            SetPos(canvasTf, "RoomJoin", new Vector2(-hGap * 0.5f, -vGap2 * 0.5f));
-            SetSize(canvasTf, "RoomJoin", btnSizeLandscape);
-            SetPos(canvasTf, "RoomId", new Vector2(hGap * 0.5f, vGap2 * 0.5f));
-            SetSize(canvasTf, "RoomId", btnSizeLandscape);
-            SetPos(canvasTf, "RoomPassword", new Vector2(hGap * 0.5f, -vGap2 * 0.5f));
-            SetSize(canvasTf, "RoomPassword", btnSizeLandscape);
-            float roomClusterBottomY = -vGap2 * 0.5f - btnSizeLandscape.y * 0.5f;
-
-            float connectClusterGap = 40f;
-            float connectPanelHeight = vGap2 * 2f + btnSizeLandscape.y + 20f; // 2行分
-            float connectPanelWidth = hGap * 2f + btnSizeLandscape.x + 40f; // 3列分(AddressInput/Host/Connect)
-            float connectPanelCenterY = roomClusterBottomY - connectClusterGap - connectPanelHeight * 0.5f;
-            SetPos(canvasTf, "ConnectPanel", new Vector2(0, connectPanelCenterY));
-            SetSize(canvasTf, "ConnectPanel", new Vector2(connectPanelWidth, connectPanelHeight));
-            SetPos(canvasTf, "ConnectPanel/AddressInput", new Vector2(-hGap, vGap2 * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/AddressInput", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnHost", new Vector2(0, vGap2 * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnHost", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnConnect", new Vector2(hGap, vGap2 * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnConnect", btnSizeLandscape);
-            SetPos(canvasTf, "ConnectPanel/BtnServer", new Vector2(0, -vGap2 * 0.5f));
-            SetSize(canvasTf, "ConnectPanel/BtnServer", btnSizeLandscape);
-
-            SetPos(canvasTf, "LobbyPanel", new Vector2(0, connectPanelCenterY));
-            SetSize(canvasTf, "LobbyPanel", new Vector2(connectPanelWidth, connectPanelHeight));
-            SetPos(canvasTf, "LobbyPanel/BtnReady", new Vector2(-hGap, 0));
-            SetSize(canvasTf, "LobbyPanel/BtnReady", btnSizeLandscape);
-            SetPos(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0, 0));
-            SetSize(canvasTf, "LobbyPanel/ReadyStatusText", btnSizeLandscape);
-            SetPos(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(hGap, 0));
-            SetSize(canvasTf, "LobbyPanel/PlayerCountText", btnSizeLandscape); // 高さ30固定だと文字が小さくなりすぎるため、他テキストと同じサイズ枠にする
-
-            float connectPanelBottomY = connectPanelCenterY - connectPanelHeight * 0.5f;
-            float startGameY = connectPanelBottomY - connectClusterGap - btnHeight * 0.5f;
-            SetPos(canvasTf, "StartGame", new Vector2(-hGap * 0.5f, startGameY));
-            SetSize(canvasTf, "StartGame", btnSizeLandscape);
-
-            SetPos(canvasTf, "BtnSettings", new Vector2(hGap * 0.5f, startGameY));
-            SetSize(canvasTf, "BtnSettings", btnSizeLandscape);
-
-            // RoomListPanelは、横持ちでは横幅に余裕があるため左側に配置し、
-            // RoomCreate/ConnectPanelクラスタ(画面中央)と重ならないようにする。
-            // ConnectPanelの実際の幅(connectPanelWidth、4K等では広がる)を基準に位置を計算する。
-            float roomListWidth = Mathf.Clamp(canvasWidth * 0.2f, 260f, 400f);
-            float roomListHeight = 260f;
-            var roomListRt = canvasTf.Find("RoomListPanel")?.GetComponent<RectTransform>();
-            if (roomListRt != null)
-            {
-                roomListRt.anchorMin = new Vector2(0.5f, 0.5f);
-                roomListRt.anchorMax = new Vector2(0.5f, 0.5f);
-                roomListRt.pivot = new Vector2(0.5f, 0.5f);
-                float roomListX = -(connectPanelWidth * 0.5f + 40f + roomListWidth * 0.5f);
-                roomListRt.anchoredPosition = new Vector2(roomListX, 0);
-                roomListRt.sizeDelta = new Vector2(roomListWidth, roomListHeight);
-            }
+            // 横持ち: 横一列に並べる
+            SetRect(canvasTf, "ConnectPanel/AddressInput", new Vector2(-330f, 25f), new Vector2(280f, 80f));
+            SetRect(canvasTf, "ConnectPanel/BtnHost", new Vector2(0f, 25f), new Vector2(280f, 80f));
+            SetRect(canvasTf, "ConnectPanel/BtnConnect", new Vector2(330f, 25f), new Vector2(280f, 80f));
+            SetRect(canvasTf, "ConnectPanel/BtnServer", new Vector2(0f, -70f), new Vector2(280f, 80f));
         }
 
-ApplyTopBars(canvasTf, canvasWidth, canvasHeight);
-        ApplyOthersLayout(canvasTf, portrait, canvasWidth, canvasHeight);
-    }
-
-    private void ApplyTopBars(Transform canvasTf, float canvasWidth, float canvasHeight)
-    {
-        float margin = Mathf.Max(20f, canvasWidth * 0.04f);
-
-        // 先に上部ボタン(Leave/History)のサイズを決める。バーはこのボタンの下に配置するため。
-        float topButtonWidth = Mathf.Clamp(canvasWidth * 0.11f, 140f, 260f);
-        float topButtonHeight = Mathf.Clamp(canvasHeight * 0.045f, 40f, 90f);
-        const float topButtonTopMargin = 15f;
-        float buttonsBottomFromTop = topButtonTopMargin + topButtonHeight;
-
-        // タイマーバー類は、上部ボタンの下端よりさらに下に配置する。
-        // 以前はバーの位置を固定(画面上端から70〜86)にしていたため、大画面でボタンの高さが
-        // 拡大するとボタンとバーが重なってしまっていた。
-        const float barHeight = 16f;
-        const float barGap = 10f;
-        float roundBarTop = buttonsBottomFromTop + barGap;
-        float transitionBarTop = roundBarTop + barHeight + 6f;
-
-        var roundBarRt = canvasTf.Find("RoundTimerBarPanel")?.GetComponent<RectTransform>();
-        if (roundBarRt != null)
+        // --- ロビーパネル(入室後: Ready/人数表示) ---
+        // ConnectPanelと同じ位置に出す(排他表示のため)
+        SetRect(canvasTf, "LobbyPanel", new Vector2(0f, connectCenterY), new Vector2(connectPanelW, connectPanelH));
+        if (portrait)
         {
-            roundBarRt.offsetMin = new Vector2(margin, -(roundBarTop + barHeight));
-            roundBarRt.offsetMax = new Vector2(-margin, -roundBarTop);
-        }
-        var transitionBarRt = canvasTf.Find("TransitionBarPanel")?.GetComponent<RectTransform>();
-        if (transitionBarRt != null)
-        {
-            transitionBarRt.offsetMin = new Vector2(margin, -(transitionBarTop + barHeight));
-            transitionBarRt.offsetMax = new Vector2(-margin, -transitionBarTop);
-        }
-
-        // Leave Room / History ボタンは、RoundTimerBarPanel(画面上端から70〜86ユニットの帯)より
-        // さらに上にある未使用の帯(0〜70ユニット)に、左右の隅として配置する。
-        // この帯はロビー画面・ゲーム画面どちらでも他要素と競合しない安全な位置。
-        var leaveRt = canvasTf.Find("BtnLeaveRoom")?.GetComponent<RectTransform>();
-        if (leaveRt != null)
-        {
-            leaveRt.anchorMin = new Vector2(0f, 1f);
-            leaveRt.anchorMax = new Vector2(0f, 1f);
-            leaveRt.pivot = new Vector2(0f, 1f);
-            leaveRt.anchoredPosition = new Vector2(margin, -topButtonTopMargin);
-            leaveRt.sizeDelta = new Vector2(topButtonWidth, topButtonHeight);
-        }
-        var historyBtnRt = canvasTf.Find("BtnHistory")?.GetComponent<RectTransform>();
-        if (historyBtnRt != null)
-        {
-            historyBtnRt.anchorMin = new Vector2(1f, 1f);
-            historyBtnRt.anchorMax = new Vector2(1f, 1f);
-            historyBtnRt.pivot = new Vector2(1f, 1f);
-            historyBtnRt.anchoredPosition = new Vector2(-margin, -topButtonTopMargin);
-            historyBtnRt.sizeDelta = new Vector2(topButtonWidth, topButtonHeight);
-        }
-    }
-
-private void ApplyCutIn(Transform canvasTf, float canvasWidth, float statusBottomFromTop, float availableGap)
-    {
-        var cutInText = canvasTf.Find("CutInPanel/CutInText")?.GetComponent<TMPro.TextMeshProUGUI>();
-        if (cutInText != null)
-        {
-            cutInText.fontSizeMax = Mathf.Clamp(canvasWidth * 0.06f, 28f, 64f);
-        }
-        var cutInPanelRt = canvasTf.Find("CutInPanel")?.GetComponent<RectTransform>();
-        if (cutInPanelRt != null)
-        {
-            // 位置が一度も設定されておらず固定のまま(中央)だったため、RoundResultPanel等と
-            // 重なることがあった。StatusTextのすぐ下、OthersCardParentより上の隙間に正確に収める。
-            cutInPanelRt.anchorMin = new Vector2(0.5f, 1f);
-            cutInPanelRt.anchorMax = new Vector2(0.5f, 1f);
-            cutInPanelRt.pivot = new Vector2(0.5f, 1f);
-            const float topMargin = 10f;
-            const float bottomSafety = 15f;
-            float cutInHeight = Mathf.Clamp(availableGap - topMargin - bottomSafety, 40f, 200f);
-            cutInPanelRt.sizeDelta = new Vector2(Mathf.Min(canvasWidth * 0.85f, 900f), cutInHeight);
-            cutInPanelRt.anchoredPosition = new Vector2(0, -(statusBottomFromTop + topMargin));
-        }
-    }
-
-    private void ApplyOthersLayout(Transform canvasTf, bool portrait, float canvasWidth, float canvasHeight)
-    {
-        // ==== 縦方向の「予算制」レイアウト ====
-        // 干渉しうる全要素(StatusText / OthersCardParent / RoundResultPanel / MyCardParent /
-        // Confirmボタン / DebugPanelとの余白)の「理想サイズ」をまず個別に計算し、その合計を
-        // 画面の高さと比較する。画面が狭くて理想サイズの合計が収まらない場合は、全要素を
-        // 同じ比率で一括圧縮することで、どんな高さでも必ず重ならずに収まることを保証する。
-        // (個々の要素を場当たり的に調整すると、別の解像度で新たな重なりを生み続けてしまうため)
-
-        // 上部ボタン(Leave/History)とタイマーバー2本の下に来るよう、下限を170に揃える
-        float statusTopOffset = Mathf.Max(portrait ? 115f : Mathf.Clamp(canvasHeight * 0.12f, 90f, 160f), 170f);
-        float statusHeight = Mathf.Clamp(canvasHeight * 0.028f, 44f, 80f);
-
-        // 右端に「今出したカード」枠を置くため、その分の幅も差し引いておく(UIEventsManagerと同値)
-        float othersAvailWidthEst = Mathf.Max(150f, canvasWidth * AvailableGameWidthRatio - 100f - 220f);
-        float othersExpectedRows = portrait ? 4f : 2f;
-        float othersHeightCap = (canvasHeight * (portrait ? 0.25f : 0.18f) / othersExpectedRows) / 160f * 110f;
-        // UIEventsManager.RefreshAllCardViewと同じ折り返し計算をする(値がズレると重なるため)
-        // UIEventsManagerと同じ計算(横持ちは幅を活かして行数を抑える)
-        float othersDesiredSpacingEst = portrait ? 60f : 45f;
-        int othersDesiredPerRowEst = Mathf.Max(1, Mathf.FloorToInt(othersAvailWidthEst / othersDesiredSpacingEst));
-        int othersSubRowsEst = Mathf.Clamp(Mathf.CeilToInt(9f / othersDesiredPerRowEst), 1, portrait ? 3 : 2);
-        int othersPerRowEst = Mathf.CeilToInt(9f / othersSubRowsEst);
-        float othersSpacingEst = Mathf.Min(Mathf.Min(130f, othersHeightCap), othersAvailWidthEst / Mathf.Max(othersPerRowEst, 1));
-        // UIEventsManager側と同じ計算にする(値がズレると行が重なるため)。
-        // 縦が狭い画面では高さから逆算した上限も考慮する。
-        float allowedTotalHeightEst = canvasHeight * (portrait ? 0.42f : 0.46f);
-        float perPlayerAllowedEst = allowedTotalHeightEst / (portrait ? 4f : 2f);
-        float scaleCapByHeightEst = Mathf.Max(0.34f, (perPlayerAllowedEst - 60f) / (140f * Mathf.Max(othersSubRowsEst, 1)));
-        float othersScaleEst = Mathf.Clamp(Mathf.Max(0.5f * (othersSpacingEst / 55f), Mathf.Min(0.6f, scaleCapByHeightEst)), 0.34f, 1.8f);
-        // UIEventsManager側と同じ式: (カード高さ×サブ行数) + サブ行間余白 + ラベル高さ + 余白
-        float othersCardRowHEst = 140f * othersScaleEst; // カードのネイティブ高さ140基準(UIEventsManagerと一致させる)
-        // ラベルはカード高さの35%を上限とする(1行表示)
-        float othersLabelFontMaxEst = Mathf.Clamp(othersCardRowHEst * 0.35f, 22f, 48f);
-        float othersRowHeightEst = othersCardRowHEst * othersSubRowsEst + (othersSubRowsEst - 1) * 8f + othersLabelFontMaxEst * 1.4f + 24f;
-        float labelTopMarginEst = othersRowHeightEst * 0.6f;
-        // labelTopMarginEstを足すとラベル高さの二重計上になる(ラベル分は既にothersRowHeightEstに
-        // 含まれている)。ここは純粋にStatusTextとの間隔のみとする。
-        float othersGap = 40f;
-        // 実測値が利用可能ならそちらを優先する(scale下限などで見積もりとズレて手札と重なるため)
-        float othersReservedHeight = Mathf.Max(
-            othersRowHeightEst * othersExpectedRows * 1.3f + (portrait ? 60f : 30f),
-            OthersActualTotalHeight + 20f);
-
-        float resultGap = 30f;
-        float resultPanelHeight = Mathf.Clamp(canvasHeight * (portrait ? 0.16f : 0.2f), portrait ? 160f : 110f, 260f);
-
-        float cardMaxRowWidth = canvasWidth * 0.92f * AvailableGameWidthRatio;
-        float cardWidthBasedCapEst = cardMaxRowWidth / 9f;
-        float cardHeightBasedCapEst = (canvasHeight * (portrait ? 0.32f : 0.27f)) / 3.45f;
-        float cardSpacingCapEst = Mathf.Clamp(Mathf.Min(cardWidthBasedCapEst, cardHeightBasedCapEst), 60f, 210f);
-        float cardScaleEst = Mathf.Clamp(Mathf.Min(cardSpacingCapEst, cardMaxRowWidth / 9f) / 95f, 0.4f, 1.8f); // UIEventsManager側と基準値(95)を一致させること
-        // 1行分の縦占有は 345*scale 程度。複数行に折り返されている場合はその行数分を見積もる
-        // (2行目以降はカード高さ分だけ加算する)。
-        float cardDownwardExtent = 345f * cardScaleEst + Mathf.Max(0, MyCardRowCount - 1) * (150f * cardScaleEst);
-
-        float resultToCardGap = portrait ? 100f : 80f; // 結果パネル下端とMyCardParentアンカーの間の最低隙間
-        // DebugPanelは本番ビルドに含まれない開発用UIなので、高さ予算には含めない。
-        // (含めると狭い画面でゲーム本体が過度に圧縮されてしまう)
-        // ここは単に画面下端との最低マージンとする。DebugPanelが重なる場合は
-        // ApplyDebugPanelLayout側で左右に逃がして対処する。
-        float bottomClearance = portrait ? 40f : 30f;
-
-        float totalIdeal = statusTopOffset + statusHeight + othersGap + othersReservedHeight
-            + resultGap + resultPanelHeight + resultToCardGap + cardDownwardExtent + bottomClearance;
-
-        float availableHeight = canvasHeight - 20f; // 上下にわずかな余白を残す
-        float compressionScale = Mathf.Min(1f, availableHeight / Mathf.Max(1f, totalIdeal));
-        VerticalCompressionScale = compressionScale;
-
-        if (compressionScale < 1f)
-        {
-            // 画面が狭く、理想サイズのままでは収まらない -> 全要素を同じ比率で圧縮する。
-            // StatusTextの高さと結果パネルの高さだけは、可読性のため下限を設けておく。
-            // statusTopOffsetは、画面上部のRoundTimerBarPanel(固定で画面上端から86ユニットの位置に
-            // 配置されている)と重ならないよう、圧縮してもその下限を下回らないようにする。
-            // タイマーバー類は上部ボタンの下に配置されるため、その下端(概算)を下回らないようにする。
-            // 上部ボタン(最大90)+マージン15+バー2本(16*2)+間隔16 ≒ 153
-            // 上部ボタン(最大90)+マージン15+バー2本(16*2)+間隔16 ≒ 153 が物理的な下限。
-            // 圧縮時はここまで詰めて、その分をゲーム本体に回す。
-            statusTopOffset = Mathf.Max(statusTopOffset * compressionScale, 155f);
-            statusHeight = Mathf.Max(statusHeight * compressionScale, 32f);
-            // 上部の隙間は圧縮時に特に切り詰める。ここが広いと一覧全体が下に押し出され、
-            // 手札と重なる原因になる(WXGAで170pxもの空白が残っていた)。
-            othersGap = Mathf.Max(12f, othersGap * compressionScale * 0.4f);
-            othersReservedHeight *= compressionScale;
-            resultGap *= compressionScale;
-            resultPanelHeight = Mathf.Max(resultPanelHeight * compressionScale, 90f);
-            resultToCardGap *= compressionScale;
-            cardDownwardExtent *= compressionScale;
-            bottomClearance *= compressionScale;
+            SetRect(canvasTf, "LobbyPanel/BtnReady", new Vector2(0f, 80f), btnSize);
+            SetRect(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(0f, -10f), new Vector2(600f, 70f));
+            SetRect(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(0f, -90f), new Vector2(600f, 70f));
         }
         else
         {
-            // 逆に画面が十分広く余白がある場合は、その余白を各隙間に均等に配分し、
-            // 上部に要素が偏って下部に不自然な空白ができるのを防ぐ。
-            float slack = availableHeight - totalIdeal;
-            // StatusTextと使用済み一覧の間(othersGap)に大きく配分すると、そこだけ
-            // 不自然な空白になる(WXGAで161pxの空白が発生していた)。
-            // 上部の隙間は控えめにし、下側の隙間に多めに配分する。
-            // 上部(StatusTextと一覧の間)は最小限にし、余白は下側に寄せる。
-            // ここに配分しすぎると一覧が下に押し出され、手札と重なる原因になる。
-            othersGap += slack * 0.05f;
-            resultGap += slack * 0.25f;
-            resultToCardGap += slack * 0.7f;
+            SetRect(canvasTf, "LobbyPanel/BtnReady", new Vector2(-330f, 25f), new Vector2(280f, 80f));
+            SetRect(canvasTf, "LobbyPanel/ReadyStatusText", new Vector2(30f, 25f), new Vector2(300f, 80f));
+            SetRect(canvasTf, "LobbyPanel/PlayerCountText", new Vector2(330f, 25f), new Vector2(300f, 80f));
         }
 
-        // ==== 圧縮/再配分後の値で、上から順に連鎖配置する ====
-        float statusBottomFromTop = statusTopOffset + statusHeight;
-
-        var statusRt = canvasTf.Find("StatusText")?.GetComponent<RectTransform>();
-        if (statusRt != null)
-        {
-            statusRt.sizeDelta = new Vector2(portrait ? Mathf.Min(canvasWidth * 0.9f, 700f) : Mathf.Min(canvasWidth * 0.42f, 800f), statusHeight);
-            statusRt.anchoredPosition = new Vector2(GameAreaCenterOffsetX, -(statusTopOffset + statusHeight * 0.5f));
-        }
-
-        string[] othersPaths = { "OthersCardParent", "OthersLabelsParent" };
-        float othersY = -(statusBottomFromTop + othersGap);
-        ApplyCutIn(canvasTf, canvasWidth, statusBottomFromTop, othersGap);
-        foreach (var p in othersPaths)
-        {
-            var t = canvasTf.Find(p);
-            if (t == null) continue;
-            var rt = t.GetComponent<RectTransform>();
-            rt.anchorMin = new Vector2(0.5f, 1f);
-            rt.anchorMax = new Vector2(0.5f, 1f);
-            rt.pivot = new Vector2(0.5f, 1f); // 上端pivotにし、アンカー点より上にはみ出さないようにする
-            rt.anchoredPosition = new Vector2(GameAreaCenterOffsetX, othersY);
-        }
-        float othersBottomFromTop = -othersY + othersReservedHeight;
-
-        var resultRt = canvasTf.Find("RoundResultPanel")?.GetComponent<RectTransform>();
-        float resultBottomFromBottom = 0f;
-        if (resultRt != null)
-        {
-            resultRt.anchorMin = new Vector2(0.5f, 1f);
-            resultRt.anchorMax = new Vector2(0.5f, 1f);
-            resultRt.pivot = new Vector2(0.5f, 1f); // 上端pivotにし、はみ出しを防ぐ
-            float resultTopOffset = othersBottomFromTop + resultGap;
-            resultRt.anchoredPosition = new Vector2(GameAreaCenterOffsetX, -resultTopOffset);
-            resultRt.sizeDelta = new Vector2(resultRt.sizeDelta.x, resultPanelHeight);
-
-            resultBottomFromBottom = canvasHeight - (resultTopOffset + resultPanelHeight); // pivotが上端のため、高さ全体を引く(以前は中心pivot前提で半分しか引いておらずズレていた)
-        }
-
-        // MyCardParentのアンカーは、結果パネル下端からresultToCardGap分下。予算が正しく組まれていれば、
-        // これは自動的にcardDownwardExtent+bottomClearanceの条件も満たす(個別の分岐が不要になった)。
-        // 手札は下方向(cardDownwardExtent)に広がるため、アンカーがそれを下回ると画面外に
-        // はみ出してしまう。画面下端マージンを確保できる最低位置を下限とする。
-        // 実測値が利用可能ならそちらを優先する(見積もり式とのズレで画面外に出るのを防ぐ)
-        float actualExtent = Mathf.Max(cardDownwardExtent, MyCardActualDownwardExtent);
-        float myCardsY = Mathf.Max(resultBottomFromBottom - resultToCardGap, actualExtent + bottomClearance);
-        var myCardRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
-        if (myCardRt != null)
-        {
-            // pivotを一度も設定していなかったため、デフォルトの中心pivotのまま、実際のカード
-            // (アンカーより下方向にのみ描画される)より上に大きくはみ出したプレースホルダー矩形が
-            // 残っており、Confirmボタン等との見かけ上の重なりの原因になっていた。
-            myCardRt.anchorMin = new Vector2(0.5f, 0f);
-            myCardRt.anchorMax = new Vector2(0.5f, 0f);
-            myCardRt.pivot = new Vector2(0.5f, 1f);
-            myCardRt.anchoredPosition = new Vector2(GameAreaCenterOffsetX, myCardsY);
-        }
-
-        // Confirmボタン(結果パネルの下端とMyCardParentの間の安全な隙間)。サイズも画面に応じて拡大する。
-        var confirmRt = canvasTf.Find("BtnConfirmCard")?.GetComponent<RectTransform>();
-        if (confirmRt != null)
-        {
-            confirmRt.anchorMin = new Vector2(0.5f, 0f);
-            confirmRt.anchorMax = new Vector2(0.5f, 0f);
-            float confirmWidth = Mathf.Clamp(canvasWidth * 0.16f, 160f, 320f);
-            float confirmHeight = Mathf.Clamp(canvasHeight * 0.045f, 40f, 90f);
-            float confirmOffset = Mathf.Min(190f, resultToCardGap - 20f) * Mathf.Min(1f, compressionScale + 0.3f);
-            float confirmY = Mathf.Clamp(myCardsY + confirmOffset, myCardsY + 40f, resultBottomFromBottom - confirmHeight * 0.5f - 15f); // ボタン自身の半分の高さ分も安全マージンに含める
-            confirmRt.anchoredPosition = new Vector2(GameAreaCenterOffsetX, confirmY);
-            confirmRt.sizeDelta = new Vector2(confirmWidth, confirmHeight);
-
-            // BtnNextRoundはConfirmボタンと排他表示(ラウンド中/結果表示中)のため、同じ位置・サイズを使い回す
-            var nextRt = canvasTf.Find("BtnNextRound")?.GetComponent<RectTransform>();
-            if (nextRt != null)
-            {
-                nextRt.anchorMin = new Vector2(0.5f, 0f);
-                nextRt.anchorMax = new Vector2(0.5f, 0f);
-                nextRt.anchoredPosition = confirmRt.anchoredPosition;
-                nextRt.sizeDelta = new Vector2(confirmWidth, confirmHeight);
-            }
-        }
-
-        // 手札の実際の下端(アンカー位置 - 下方向への広がり)を渡し、重なる場合だけ逃がす
-        ApplyDebugPanelLayout(canvasTf, portrait, canvasWidth, canvasHeight, myCardsY - cardDownwardExtent);
-        ApplySettingsPanelLayout(canvasTf, canvasWidth, canvasHeight);
-        ApplyHistoryPanelLayout(canvasTf, canvasWidth, canvasHeight);
-        ApplyDynamicFontSizes(canvasTf, canvasWidth, canvasHeight);
+        // --- 開始/設定ボタン ---
+        float belowPanelY = connectCenterY - connectPanelH * 0.5f - panelGap - 45f;
+        SetRect(canvasTf, "StartGame", new Vector2(-160f, belowPanelY), new Vector2(300f, 90f));
+        SetRect(canvasTf, "BtnSettings", new Vector2(160f, belowPanelY), new Vector2(300f, 90f));
     }
 
-    // 主要テキストのフォントサイズ上限を画面サイズに連動させる。
-    // 固定の上限値(例: StatusTextの36)のままだと、4K等の大画面で画面に対して
-    // 極端に小さく表示され読みづらくなるため。
-    private void ApplyDynamicFontSizes(Transform canvasTf, float canvasWidth, float canvasHeight)
+    // 中央アンカーに揃えるヘルパー(基準解像度上の座標で扱えるようにする)
+    private static void CenterAnchor(RectTransform rt)
     {
-        float basis = Mathf.Min(canvasWidth, canvasHeight * 1.6f); // 極端な縦長で大きくなりすぎないよう抑制
-
-        var statusTmp = canvasTf.Find("StatusText")?.GetComponent<TMPro.TMP_Text>();
-        if (statusTmp != null)
-        {
-            statusTmp.fontSizeMax = Mathf.Clamp(basis * 0.028f, 36f, 90f);
-            statusTmp.fontSizeMin = 18f;
-        }
-
-        // 他プレイヤーのラベル(名前・得点)
-        var labelsParent = canvasTf.Find("OthersLabelsParent");
-        if (labelsParent != null)
-        {
-            float labelMax = Mathf.Clamp(basis * 0.02f, 40f, 70f);
-            for (int i = 0; i < labelsParent.childCount; i++)
-            {
-                var tmp = labelsParent.GetChild(i).GetComponent<TMPro.TMP_Text>();
-                if (tmp != null) { tmp.fontSizeMax = labelMax; tmp.fontSizeMin = 14f; }
-            }
-        }
-
-        // ラウンド結果パネル内のラベル
-        var resultPanel = canvasTf.Find("RoundResultPanel");
-        if (resultPanel != null)
-        {
-            float resultMax = Mathf.Clamp(basis * 0.018f, 32f, 60f);
-            var tmps = resultPanel.GetComponentsInChildren<TMPro.TMP_Text>(true);
-            foreach (var tmp in tmps)
-            {
-                tmp.fontSizeMax = resultMax;
-                tmp.fontSizeMin = 14f;
-            }
-        }
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
     }
 
-    // 横持ちで横幅に十分な余裕がある場合、履歴パネルを画面右側に常駐表示できる。
-    // (縦持ちや幅の狭い画面では、ゲーム本体と干渉するためポップアップ形式のまま)
-    public static bool IsHistoryDockedMode { get; private set; }
-    // 履歴パネルが常駐している場合、ゲーム本体(結果パネル等)が使える幅は
-    // その分狭くなる。UIEventsManager側がこの値を見て幅を決める。
-    public static float AvailableGameWidthRatio { get; private set; } = 1f;
-    // 履歴パネルが右側に常駐している場合、ゲーム領域の中心は画面中央より左にずれる。
-    // カード列などを中央揃えする際にこのオフセットを加算する(常駐していない時は0)。
-    public static float GameAreaCenterOffsetX { get; private set; } = 0f;
-    // 自分の手札が実際に何行に折り返されているか。行数が増えるとカードの縦占有も増えるため、
-    // レイアウトの高さ予算計算でこの値を使う。UIEventsManagerが設定する。
-    public static int MyCardRowCount { get; set; } = 1;
-    // 手札が実際にアンカーからどれだけ下方向に広がったか(実測値)。
-    // 見積もり式とのズレで画面外にはみ出すのを防ぐため、UIEventsManagerが実際の値を書き込む。
-    public static float MyCardActualDownwardExtent { get; set; } = 0f;
-    // 使用済み一覧(全プレイヤー分)が実際に占有する高さ。見積もり式とのズレで
-    // 手札と重なるのを防ぐため、UIEventsManagerが実測値を書き込む。
-    public static float OthersActualTotalHeight { get; set; } = 0f;
-
-    private void ApplyHistoryPanelLayout(Transform canvasTf, float canvasWidth, float canvasHeight)
-    {
-        var historyRt = canvasTf.Find("HistoryPanel")?.GetComponent<RectTransform>();
-
-        // 常駐表示の条件: 横持ちであり、かつゲーム本体(中央の縦積み)に必要な幅を差し引いても
-        // 履歴パネル用の幅が十分に残ること。
-        bool portrait = canvasHeight >= canvasWidth;
-        float dockedWidth = Mathf.Clamp(canvasWidth * 0.30f, 420f, 760f); // カードUIを並べるため以前より広く取る
-        float gameContentWidth = canvasWidth * 0.92f; // カード列が使う想定幅
-        bool canDock = !portrait && (canvasWidth - gameContentWidth) < 0f
-            ? false
-            : (!portrait && canvasWidth >= 1500f); // ある程度広い横持ちのみ
-        IsHistoryDockedMode = canDock;
-        // 常駐時は、履歴パネルの幅+余白の分だけゲーム本体が使える幅を減らす
-        // 履歴パネル幅 + 左右余白 + 追加の安全マージンを差し引く。
-        // 安全マージンが無いとQHD等の中間解像度でわずかに重なることがあった。
-        AvailableGameWidthRatio = canDock
-            ? Mathf.Clamp01((canvasWidth - dockedWidth - Mathf.Max(20f, canvasWidth * 0.02f) * 2f - canvasWidth * 0.08f) / canvasWidth)
-            : 1f;
-        // ゲーム領域は画面左端〜履歴パネル左端までなので、その中心は
-        // 画面中央から見て「履歴パネル幅+余白」の半分だけ左になる。
-        GameAreaCenterOffsetX = canDock
-            ? -(dockedWidth + Mathf.Max(20f, canvasWidth * 0.02f)) * 0.5f
-            : 0f;
-
-        if (historyRt == null) return;
-
-        if (canDock)
-        {
-            // 右端に縦長で常駐させる
-            historyRt.anchorMin = new Vector2(1f, 0.5f);
-            historyRt.anchorMax = new Vector2(1f, 0.5f);
-            historyRt.pivot = new Vector2(1f, 0.5f);
-            float h = Mathf.Clamp(canvasHeight * 0.6f, 300f, 900f);
-            historyRt.sizeDelta = new Vector2(dockedWidth, h);
-            historyRt.anchoredPosition = new Vector2(-Mathf.Max(20f, canvasWidth * 0.02f), 0f);
-        }
-        else
-        {
-            // 中央のポップアップ形式
-            historyRt.anchorMin = new Vector2(0.5f, 0.5f);
-            historyRt.anchorMax = new Vector2(0.5f, 0.5f);
-            historyRt.pivot = new Vector2(0.5f, 0.5f);
-            float w = Mathf.Clamp(canvasWidth * 0.5f, 400f, 900f);
-            float h = Mathf.Clamp(canvasHeight * 0.5f, 300f, 800f);
-            historyRt.sizeDelta = new Vector2(w, h);
-            historyRt.anchoredPosition = Vector2.zero;
-        }
-
-        // ゲームオーバー時のテキストも、画面に対して十分大きく表示されるようにする
-        var gameOverTextRt = canvasTf.Find("GameOverPanel/GameOverText")?.GetComponent<RectTransform>();
-        if (gameOverTextRt != null)
-        {
-            gameOverTextRt.sizeDelta = new Vector2(Mathf.Min(canvasWidth * 0.85f, 1200f), Mathf.Clamp(canvasHeight * 0.25f, 200f, 500f));
-        }
-        var gameOverBtnRt = canvasTf.Find("GameOverPanel/BtnCloseGameOver")?.GetComponent<RectTransform>();
-        if (gameOverBtnRt != null)
-        {
-            float btnW = Mathf.Clamp(canvasWidth * 0.16f, 180f, 360f);
-            float btnH = Mathf.Clamp(canvasHeight * 0.05f, 50f, 100f);
-            gameOverBtnRt.sizeDelta = new Vector2(btnW, btnH);
-            gameOverBtnRt.anchoredPosition = new Vector2(0, -(Mathf.Clamp(canvasHeight * 0.13f, 120f, 320f)));
-        }
-    }
-
-    // パネル内の子要素のサイズ/位置を、存在する場合だけ設定するヘルパー
-    private static void SetSizeIfExists(Transform parent, string path, Vector2 size)
+    // 中央基準で位置とサイズをまとめて設定する
+    private static void SetRect(Transform parent, string path, Vector2 pos, Vector2 size)
     {
         var rt = parent.Find(path)?.GetComponent<RectTransform>();
-        if (rt != null) rt.sizeDelta = size;
+        if (rt == null) return;
+        CenterAnchor(rt);
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = size;
     }
 
-    private static void SetPosIfExists(Transform parent, string path, Vector2 pos)
+    private void ApplyOthersLayout(bool portrait, float canvasWidth, float canvasHeight)
+    {
+        var canvasTf = transform;
+
+        // --- 上部: ボタン ---
+        Vector2 topBtnSize = new Vector2(220f, 70f);
+        SetAnchoredRect(canvasTf, "BtnLeaveRoom", new Vector2(0f, 1f), new Vector2(40f, -20f), topBtnSize);
+        SetAnchoredRect(canvasTf, "BtnHistory", new Vector2(1f, 1f), new Vector2(-40f, -20f), topBtnSize);
+
+        // --- 上部: タイマーバー(左右に伸ばす) ---
+        StretchHorizontal(canvasTf, "RoundTimerBarPanel", 60f, -100f, 18f);
+        StretchHorizontal(canvasTf, "TransitionBarPanel", 60f, -124f, 18f);
+
+        // --- 上部: 状況テキスト ---
+        // 固定幅(1100)にすると、縦持ちなどCanvas幅がそれより狭い場合に画面外へはみ出す。
+        // 左右マージン指定のストレッチにして、常に画面内に収める。
+        StretchHorizontal(canvasTf, "StatusText", 40f, -145f, 70f);
+        // 背景(Bg)が親より外側に広がっていると、親を画面内に収めても背景がはみ出す。
+        // 親いっぱいにぴったり合わせる。
+        var statusBg = canvasTf.Find("StatusText/Bg")?.GetComponent<RectTransform>();
+        if (statusBg != null)
+        {
+            statusBg.anchorMin = Vector2.zero;
+            statusBg.anchorMax = Vector2.one;
+            statusBg.offsetMin = Vector2.zero;
+            statusBg.offsetMax = Vector2.zero;
+        }
+
+        // --- 中央: 使用済みカード一覧 ---
+        // 中身(カード)の配置はUIEventsManager側が行う。ここでは基準点だけ決める。
+        // 一覧の開始位置。縦持ちは縦に余裕があるので、上部の固定要素の下から少し空ける。
+        float othersTop = portrait ? -260f : -230f;
+        var othersRt = canvasTf.Find("OthersCardParent")?.GetComponent<RectTransform>();
+        if (othersRt != null)
+        {
+            othersRt.anchorMin = new Vector2(0.5f, 1f);
+            othersRt.anchorMax = new Vector2(0.5f, 1f);
+            othersRt.pivot = new Vector2(0.5f, 1f);
+            othersRt.anchoredPosition = new Vector2(0f, othersTop);
+        }
+        // ラベルはカード一覧と同じ基準点に重ねる(内部で行ごとにずらす)
+        var labelsRt = canvasTf.Find("OthersLabelsParent")?.GetComponent<RectTransform>();
+        if (labelsRt != null && othersRt != null)
+        {
+            labelsRt.anchorMin = othersRt.anchorMin;
+            labelsRt.anchorMax = othersRt.anchorMax;
+            labelsRt.pivot = othersRt.pivot;
+            labelsRt.anchoredPosition = othersRt.anchoredPosition;
+        }
+        // 「今出したカード」枠はOthersCardParentの子なので、ここでの配置は不要
+
+        // --- 下部: 自分の手札 ---
+        // 下端アンカーにすることで、画面下からの距離が常に一定になる。
+        var myRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
+        if (myRt != null)
+        {
+            myRt.anchorMin = new Vector2(0.5f, 0f);
+            myRt.anchorMax = new Vector2(0.5f, 0f);
+            myRt.pivot = new Vector2(0.5f, 0f);
+            // 縦持ちはDebugPanel(左下)と重ならないよう少し上げる
+            myRt.anchoredPosition = new Vector2(0f, portrait ? 150f : 40f);
+        }
+
+        // --- 下部: 確定/次へボタン ---
+        // 手札の上に十分な間隔を空けて配置する(手札は最大2行 = 約300 になりうる)。
+        Vector2 actionBtnSize = new Vector2(340f, 90f);
+        float myCardsBottom = portrait ? 150f : 40f;
+        // 手札の上端から少し上に置く。手札は最大2行なので、その高さを見込む。
+        // (固定値で高く置きすぎると、上の使用済み一覧と重なる)
+        float myCardsTop = myCardsBottom + 150f * MyCardRowCountForLayout;
+        float actionBtnY = myCardsTop + 70f;
+        SetAnchoredRect(canvasTf, "BtnConfirmCard", new Vector2(0.5f, 0f), new Vector2(0f, actionBtnY), actionBtnSize);
+        SetAnchoredRect(canvasTf, "BtnNextRound", new Vector2(0.5f, 0f), new Vector2(0f, actionBtnY), actionBtnSize);
+
+        // --- フォントサイズを基準解像度に合わせる ---
+        // シーン上に14や32など小さい固定値のまま残っているものがあるため、ここで統一する。
+        SetFontRange(canvasTf, "BtnConfirmCard", 16f, 44f);
+        SetFontRange(canvasTf, "BtnNextRound", 16f, 44f);
+        SetFontRange(canvasTf, "RoomId", 16f, 40f);
+        SetFontRange(canvasTf, "RoomPassword", 16f, 40f);
+    }
+
+    // 設定画面を開くタイミングでレイアウトを適用し直すための入口。
+    // (Awake時だけだと、シーン上の固定値が残ることがあるため)
+    public void ReapplySettingsPanel()
+    {
+        var size = GetActualCanvasSize();
+        ApplySettingsPanelLayout(transform, size.y >= size.x);
+    }
+
+    // === 設定画面のレイアウト ===
+    // 縦持ちは横幅が狭いため、ラベルと入力欄を横並びではなく縦積みにする。
+    // 横並びのままだと1要素あたりの幅が足りず、文字が極端に縮小されて読めなくなる。
+    private void ApplySettingsPanelLayout(Transform canvasTf, bool portrait)
+    {
+        var panel = canvasTf.Find("SettingsPanel");
+        if (panel == null) return;
+        var panelRt = panel.GetComponent<RectTransform>();
+
+        // モーダルの背後を覆う暗幕。
+        // パネル本体のalphaを上げても角丸スプライトの縁から背景が透けるため全画面の幕を敷く。
+        // パネルの子にすると「パネル背景より前面」に描画されてしまうので、
+        // Canvas直下に置き、パネルの直前(=背面)に配置する。
+        var dimTf = canvasTf.Find("ModalDim") as RectTransform;
+        if (dimTf == null)
+        {
+            var dimGo = new GameObject("ModalDim");
+            dimGo.transform.SetParent(canvasTf, false);
+            dimTf = dimGo.AddComponent<RectTransform>();
+            var dimImg = dimGo.AddComponent<UnityEngine.UI.Image>();
+            dimImg.color = new Color(0f, 0f, 0f, 0.8f);
+            dimGo.SetActive(false); // 初期状態は非表示(開いたときにUIEventsManagerが有効化する)
+        }
+        // 画面全体を覆う
+        dimTf.anchorMin = Vector2.zero;
+        dimTf.anchorMax = Vector2.one;
+        dimTf.offsetMin = Vector2.zero;
+        dimTf.offsetMax = Vector2.zero;
+        // 描画順を整える(表示/非表示はUIEventsManagerが開閉時に制御する)。
+        // 暗幕を最前面に出した直後にパネルを最前面へ動かすことで、
+        // 「暗幕 → パネル」の順(パネルが手前)になる。
+        // Canvasの有効/無効切り替え中はSetSiblingIndexが呼べない(警告になる)ため、
+        // パネルが表示されているときだけ描画順を整える。
+        if (panel.gameObject.activeInHierarchy)
+        {
+            dimTf.SetAsLastSibling();
+            panel.SetAsLastSibling();
+        }
+
+        // パネル背景は不透明にする。
+        // 角丸スプライトを使っているとalpha 0.97程度でも背後が透けて見えるため。
+        var panelImg = panel.GetComponent<UnityEngine.UI.Image>();
+        if (panelImg != null)
+        {
+            var c = panelImg.color;
+            panelImg.color = new Color(c.r, c.g, c.b, 1f);
+        }
+
+        // パネル自体のサイズ。縦持ちは縦に伸ばして1項目ずつ積めるようにする。
+        // Canvasの実サイズを基準に決める。固定値だと、縦持ちでCanvas幅が
+        // それより狭い場合に画面外へはみ出すため。
+        var canvasSize = GetActualCanvasSize();
+        // 横持ちは項目を2列に並べるが、それでも縦に5段(Title/CardCount/MaxPlayers/
+        // ScoringMode/ボタン)必要なため、620では下部ボタンが30pxはみ出していた。
+        Vector2 panelSize = portrait
+            ? new Vector2(Mathf.Min(900f, canvasSize.x * 0.92f), Mathf.Min(1150f, canvasSize.y * 0.62f))
+            : new Vector2(Mathf.Min(1000f, canvasSize.x * 0.7f), Mathf.Min(720f, canvasSize.y * 0.85f));
+        panelRt.anchorMin = new Vector2(0.5f, 0.5f);
+        panelRt.anchorMax = new Vector2(0.5f, 0.5f);
+        panelRt.pivot = new Vector2(0.5f, 0.5f);
+        panelRt.anchoredPosition = Vector2.zero;
+        panelRt.sizeDelta = panelSize;
+
+        float w = panelSize.x;
+        float rowH = portrait ? 90f : 80f;
+
+        if (portrait)
+        {
+            // 縦積み: ラベルの下に入力欄を置く
+            float y = panelSize.y * 0.5f - 90f;
+            SetRect(panel, "Title", new Vector2(0f, y), new Vector2(w * 0.9f, 90f));
+            y -= 130f;
+            SetRect(panel, "CardCountLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
+            y -= rowH + 10f;
+            SetRect(panel, "CardCountInput", new Vector2(0f, y), new Vector2(w * 0.5f, rowH));
+            y -= rowH + 40f;
+            SetRect(panel, "MaxPlayersLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
+            y -= rowH + 10f;
+            SetRect(panel, "MaxPlayersInput", new Vector2(0f, y), new Vector2(w * 0.5f, rowH));
+            y -= rowH + 40f;
+            SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
+            y -= rowH + 10f;
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+            SetRect(panel, "BtnScoringSum", new Vector2(w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+            y -= rowH + 50f;
+            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+        }
+        else
+        {
+            // 横持ち: ラベルと入力欄を左右に並べる
+            float y = panelSize.y * 0.5f - 70f;
+            SetRect(panel, "Title", new Vector2(0f, y), new Vector2(w * 0.9f, 80f));
+            y -= 110f;
+            SetRect(panel, "CardCountLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
+            SetRect(panel, "CardCountInput", new Vector2(w * 0.25f, y), new Vector2(w * 0.24f, rowH));
+            y -= rowH + 20f;
+            SetRect(panel, "MaxPlayersLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
+            SetRect(panel, "MaxPlayersInput", new Vector2(w * 0.25f, y), new Vector2(w * 0.24f, rowH));
+            y -= rowH + 30f;
+            SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.9f, rowH));
+            y -= rowH + 15f;
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.23f, y), new Vector2(w * 0.42f, rowH));
+            SetRect(panel, "BtnScoringSum", new Vector2(w * 0.23f, y), new Vector2(w * 0.42f, rowH));
+            y -= rowH + 30f;
+            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.19f, y), new Vector2(w * 0.34f, rowH));
+            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.19f, y), new Vector2(w * 0.34f, rowH));
+        }
+
+        // フォントは基準解像度に合わせて統一する。
+        // シーン上に14や26といった小さい固定値が残っており、画面が大きくても拡大されなかった。
+        SetFontRange(panel, "Title", 20f, 64f);
+        foreach (var n in new[] { "CardCountLabel", "MaxPlayersLabel", "ScoringModeLabel" })
+            SetFontRange(panel, n, 16f, 44f);
+        foreach (var n in new[] { "CardCountInput", "MaxPlayersInput" })
+            SetFontRange(panel, n, 16f, 44f);
+        foreach (var n in new[] { "BtnScoringFixed", "BtnScoringSum", "BtnApplySettings", "BtnCloseSettings" })
+            SetFontRange(panel, n, 14f, 40f);
+    }
+
+    // 配下の全テキストの自動サイズ範囲を揃える。
+    // シーン上に小さい固定値(14等)が残っていると、画面が大きくても文字が
+    // 拡大されず読めなくなるため、コード側で統一する。
+    private static void SetFontRange(Transform parent, string path, float min, float max)
+    {
+        var t = parent.Find(path);
+        if (t == null) return;
+
+        // TMP_InputFieldは内部テキストのサイズをpointSizeで別管理しており、
+        // 子テキストのfontSizeMaxだけ上げても実際の表示サイズは変わらない。
+        var input = t.GetComponent<TMPro.TMP_InputField>();
+        if (input != null)
+        {
+            input.pointSize = max * 0.8f;
+            if (input.textComponent != null)
+            {
+                input.textComponent.enableAutoSizing = false;
+                input.textComponent.fontSize = max * 0.8f;
+                // 入力欄の枠が縦に大きいと、上寄せのままでは文字が小さく見えるため中央に揃える
+                input.textComponent.alignment = TMPro.TextAlignmentOptions.Center;
+            }
+            if (input.placeholder is TMPro.TMP_Text ph)
+            {
+                ph.enableAutoSizing = false;
+                ph.fontSize = max * 0.8f;
+                ph.alignment = TMPro.TextAlignmentOptions.Center;
+            }
+            // TextAreaが枠いっぱいに広がるようにする(余白が大きいと文字が小さく見える)
+            var textArea = t.Find("Text Area")?.GetComponent<RectTransform>();
+            if (textArea != null)
+            {
+                textArea.anchorMin = Vector2.zero;
+                textArea.anchorMax = Vector2.one;
+                textArea.offsetMin = new Vector2(12f, 4f);
+                textArea.offsetMax = new Vector2(-12f, -4f);
+            }
+            return;
+        }
+
+        foreach (var tmp in t.GetComponentsInChildren<TMPro.TMP_Text>(true))
+        {
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = min;
+            tmp.fontSizeMax = max;
+        }
+    }
+
+    // アンカーを指定して位置・サイズを設定する。
+    // anchorはpivotと一致させるので、anchoredPositionは「そのアンカーからの距離」になる。
+    private static void SetAnchoredRect(Transform parent, string path, Vector2 anchor, Vector2 pos, Vector2 size)
     {
         var rt = parent.Find(path)?.GetComponent<RectTransform>();
-        if (rt != null) rt.anchoredPosition = pos;
+        if (rt == null) return;
+        rt.anchorMin = anchor;
+        rt.anchorMax = anchor;
+        rt.pivot = anchor;
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = size;
     }
 
-    private void ApplySettingsPanelLayout(Transform canvasTf, float canvasWidth, float canvasHeight)
+    // 左右いっぱいに伸ばし、上端からの距離と高さを指定する
+    private static void StretchHorizontal(Transform parent, string path, float sideMargin, float topOffset, float height)
     {
-        var panelRt = canvasTf.Find("SettingsPanel")?.GetComponent<RectTransform>();
-        if (panelRt == null) return;
-
-        float panelWidth = Mathf.Min(600f, canvasWidth * 0.9f);
-        float panelHeight = Mathf.Min(540f, canvasHeight * 0.85f);
-        panelRt.sizeDelta = new Vector2(panelWidth, panelHeight);
-
-        // 設定画面内のフォントサイズも、パネルの実サイズに連動させる。
-        // 固定値(14〜28)のままだと、縦持ちの高解像度画面でパネルは大きいのに
-        // 文字だけ極端に小さく、特に入力欄の文字(14)が読めない状態になっていた。
-        float settingsFontBasis = Mathf.Min(panelWidth, panelHeight);
-        float labelMax = Mathf.Clamp(settingsFontBasis * 0.075f, 26f, 52f);
-        float titleMax = Mathf.Clamp(settingsFontBasis * 0.11f, 40f, 76f);
-        float inputMax = Mathf.Clamp(settingsFontBasis * 0.07f, 24f, 46f);
-
-        var titleTmp = panelRt.Find("Title")?.GetComponent<TMPro.TMP_Text>();
-        if (titleTmp != null) { titleTmp.fontSizeMax = titleMax; titleTmp.fontSizeMin = 16f; }
-
-        string[] labelPaths = { "CardCountLabel", "MaxPlayersLabel", "ScoringModeLabel",
-            "BtnScoringFixed/Text", "BtnScoringSum/Text", "BtnApplySettings/Text", "BtnCloseSettings/Text" };
-        foreach (var p in labelPaths)
-        {
-            var t = panelRt.Find(p)?.GetComponent<TMPro.TMP_Text>();
-            if (t != null) { t.fontSizeMax = labelMax; t.fontSizeMin = 12f; }
-        }
-
-        // 各要素の枠サイズもパネルに連動させる。枠が小さいままだとautoSizeにより
-        // 文字が縮小されてしまい、fontSizeMaxを上げても実際の表示は大きくならないため。
-        float rowH = Mathf.Clamp(panelHeight * 0.085f, 40f, 80f);
-        float labelW = panelWidth * 0.44f;
-        float inputW = panelWidth * 0.26f;
-        float sideX = panelWidth * 0.24f;
-
-        SetSizeIfExists(panelRt, "Title", new Vector2(panelWidth * 0.9f, rowH * 1.2f));
-        SetSizeIfExists(panelRt, "CardCountLabel", new Vector2(labelW, rowH));
-        SetSizeIfExists(panelRt, "MaxPlayersLabel", new Vector2(labelW, rowH));
-        SetSizeIfExists(panelRt, "ScoringModeLabel", new Vector2(panelWidth * 0.9f, rowH));
-        SetSizeIfExists(panelRt, "CardCountInput", new Vector2(inputW, rowH));
-        SetSizeIfExists(panelRt, "MaxPlayersInput", new Vector2(inputW, rowH));
-        SetSizeIfExists(panelRt, "BtnScoringFixed", new Vector2(panelWidth * 0.44f, rowH * 1.3f));
-        SetSizeIfExists(panelRt, "BtnScoringSum", new Vector2(panelWidth * 0.44f, rowH * 1.3f));
-        SetSizeIfExists(panelRt, "BtnApplySettings", new Vector2(panelWidth * 0.34f, rowH * 1.1f));
-        SetSizeIfExists(panelRt, "BtnCloseSettings", new Vector2(panelWidth * 0.34f, rowH * 1.1f));
-
-        SetPosIfExists(panelRt, "CardCountLabel", new Vector2(-sideX, panelHeight * 0.23f));
-        SetPosIfExists(panelRt, "CardCountInput", new Vector2(sideX, panelHeight * 0.23f));
-        SetPosIfExists(panelRt, "MaxPlayersLabel", new Vector2(-sideX, panelHeight * 0.12f));
-        SetPosIfExists(panelRt, "MaxPlayersInput", new Vector2(sideX, panelHeight * 0.12f));
-        SetPosIfExists(panelRt, "Title", new Vector2(0, panelHeight * 0.36f));
-        SetPosIfExists(panelRt, "ScoringModeLabel", new Vector2(0, panelHeight * 0.01f));
-        SetPosIfExists(panelRt, "BtnScoringFixed", new Vector2(-sideX, -panelHeight * 0.11f));
-        SetPosIfExists(panelRt, "BtnScoringSum", new Vector2(sideX, -panelHeight * 0.11f));
-        SetPosIfExists(panelRt, "BtnApplySettings", new Vector2(-panelWidth * 0.19f, -panelHeight * 0.33f));
-        SetPosIfExists(panelRt, "BtnCloseSettings", new Vector2(panelWidth * 0.19f, -panelHeight * 0.33f));
-
-        // 入力欄(TMP_InputField)内のテキスト・プレースホルダー
-        string[] inputPaths = { "CardCountInput", "MaxPlayersInput" };
-        foreach (var p in inputPaths)
-        {
-            var inputTf = panelRt.Find(p);
-            if (inputTf == null) continue;
-            var texts = inputTf.GetComponentsInChildren<TMPro.TMP_Text>(true);
-            foreach (var t in texts)
-            {
-                t.enableAutoSizing = true;
-                t.fontSizeMax = inputMax;
-                t.fontSizeMin = 12f;
-            }
-        }
+        var rt = parent.Find(path)?.GetComponent<RectTransform>();
+        if (rt == null) return;
+        rt.anchorMin = new Vector2(0f, 1f);
+        rt.anchorMax = new Vector2(1f, 1f);
+        rt.pivot = new Vector2(0.5f, 1f);
+        rt.offsetMin = new Vector2(sideMargin, topOffset - height);
+        rt.offsetMax = new Vector2(-sideMargin, topOffset);
     }
 
     private void ApplyDebugPanelLayout(Transform canvasTf, bool portrait, float canvasWidth, float canvasHeight, float myCardsBottomY)
