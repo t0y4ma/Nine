@@ -44,13 +44,19 @@ public class RoomManager : NetworkBehaviour
         Debug.Log("Create a room with id of " + roomId + ", password of " + password);
 
         var gm = Instantiate(GM);
-        NetworkServer.Spawn(gm);
 
         Room room = new Room(gm.GetComponent<GameManager>(), password);
         room.matchId = Guid.NewGuid();
         room.roomId = roomId;
         room.hostConnection = sender; // このコマンドを送ってきたクライアントがホスト権限を持つ
-        room.gameManager.GetComponent<NetworkMatch>().matchId = room.matchId;
+
+        // matchIdはSpawnより前に設定する。
+        // NetworkMatchはインタレスト管理なので、Spawn時点のmatchIdで配信先が決まる。
+        // 後から設定しても、その時点で観測対象外だったクライアントには
+        // オブジェクトが送られず、OnStartClientも呼ばれない
+        // (=SyncListのCallbackが登録されず履歴やゲーム結果が届かない)。
+        gm.GetComponent<NetworkMatch>().matchId = room.matchId;
+        NetworkServer.Spawn(gm);
 
         RoomInfo roomInfo = new RoomInfo();
         roomInfo.name = roomId;

@@ -74,13 +74,16 @@ public class Room
     public Player AddBotPlayer(GameObject playerPrefab)
     {
         var obj = UnityEngine.Object.Instantiate(playerPrefab);
-        NetworkServer.Spawn(obj);
 
         var playerCom = obj.GetComponent<Player>();
         int id = playerComponents.Count;
         playerCom.Setup(this, id);
         playerCom.gameManager = gameManager;
+        // matchIdはSpawnより前に設定する(NetworkMatchはインタレスト管理のため、
+        // Spawn時点のmatchIdで配信先が決まる)
         obj.GetComponent<NetworkMatch>().matchId = matchId;
+
+        NetworkServer.Spawn(obj);
 
         playerComponents.Add(playerCom);
         gameManager.AddPlayer();

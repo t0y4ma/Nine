@@ -263,54 +263,59 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             statusBg.offsetMax = Vector2.zero;
         }
 
-        // --- 中央: 使用済みカード一覧 ---
-        // 中身(カード)の配置はUIEventsManager側が行う。ここでは基準点だけ決める。
-        // 一覧の開始位置。縦持ちは縦に余裕があるので、上部の固定要素の下から少し空ける。
-        float othersTop = portrait ? -260f : -230f;
-        var othersRt = canvasTf.Find("OthersCardParent")?.GetComponent<RectTransform>();
-        if (othersRt != null)
+        // === ゲーム本体を縦3領域に配分する ===
+        // 上から: 使用済み一覧 / 今出したカード / 手札。
+        // 高さの配分はLayoutElement.flexibleHeightでUnityに任せる。
+        // 手計算で各領域の高さを出すと、片方を変えたときにもう片方の
+        // 計算を直し忘れて重なる、という事故が繰り返し起きていた。
+        var boardRt = canvasTf.Find("GameBoard") as RectTransform;
+        if (boardRt == null)
         {
-            othersRt.anchorMin = new Vector2(0.5f, 1f);
-            othersRt.anchorMax = new Vector2(0.5f, 1f);
-            othersRt.pivot = new Vector2(0.5f, 1f);
-            othersRt.anchoredPosition = new Vector2(0f, othersTop);
+            var go = new GameObject("GameBoard");
+            go.transform.SetParent(canvasTf, false);
+            boardRt = go.AddComponent<RectTransform>();
         }
-        // ラベルはカード一覧と同じ基準点に重ねる(内部で行ごとにずらす)
-        var labelsRt = canvasTf.Find("OthersLabelsParent")?.GetComponent<RectTransform>();
-        if (labelsRt != null && othersRt != null)
-        {
-            labelsRt.anchorMin = othersRt.anchorMin;
-            labelsRt.anchorMax = othersRt.anchorMax;
-            labelsRt.pivot = othersRt.pivot;
-            labelsRt.anchoredPosition = othersRt.anchoredPosition;
-        }
-        // 「今出したカード」枠はOthersCardParentの子なので、ここでの配置は不要
+        // 上部固定要素の下から、画面下端までを占める
+        boardRt.anchorMin = new Vector2(0f, 0f);
+        boardRt.anchorMax = new Vector2(1f, 1f);
+        boardRt.pivot = new Vector2(0.5f, 0.5f);
+        // 画面端ギリギリまで使うと窮屈で見にくいため、左右に余白を取る。
+        // 割合(1%)にしておけば、どの解像度でも同じ見た目の余白になる。
+        float sideMargin = canvasWidth * 0.01f;
+        boardRt.offsetMin = new Vector2(sideMargin, 20f);
+        boardRt.offsetMax = new Vector2(-sideMargin, -220f);
 
-        // --- 下部: 自分の手札 ---
-        // 下端アンカーにすることで、画面下からの距離が常に一定になる。
-        var myRt = canvasTf.Find("MyCardParent")?.GetComponent<RectTransform>();
-        if (myRt != null)
-        {
-            myRt.anchorMin = new Vector2(0.5f, 0f);
-            myRt.anchorMax = new Vector2(0.5f, 0f);
-            myRt.pivot = new Vector2(0.5f, 0f);
-            // 縦持ちはDebugPanel(左下)と重ならないよう少し上げる
-            myRt.anchoredPosition = new Vector2(0f, portrait ? 150f : 40f);
-        }
+        var vl = boardRt.GetComponent<UnityEngine.UI.VerticalLayoutGroup>();
+        if (vl == null) vl = boardRt.gameObject.AddComponent<UnityEngine.UI.VerticalLayoutGroup>();
+        vl.childAlignment = TextAnchor.UpperCenter;
+        vl.spacing = 12f;
+        vl.childControlWidth = true;
+        vl.childControlHeight = true;
+        vl.childForceExpandWidth = true;
+        vl.childForceExpandHeight = false;
 
-        // --- 下部: 確定/次へボタン ---
-        // 手札の上に十分な間隔を空けて配置する(手札は最大2行 = 約300 になりうる)。
-        Vector2 actionBtnSize = new Vector2(340f, 90f);
-        float myCardsBottom = portrait ? 150f : 40f;
-        // 手札の上端から少し上に置く。手札は最大2行なので、その高さを見込む。
-        // (固定値で高く置きすぎると、上の使用済み一覧と重なる)
-        float myCardsTop = myCardsBottom + 150f * MyCardRowCountForLayout;
-        float actionBtnY = myCardsTop + 70f;
-        SetAnchoredRect(canvasTf, "BtnConfirmCard", new Vector2(0.5f, 0f), new Vector2(0f, actionBtnY), actionBtnSize);
-        SetAnchoredRect(canvasTf, "BtnNextRound", new Vector2(0.5f, 0f), new Vector2(0f, actionBtnY), actionBtnSize);
+        // 各領域をこのコンテナの子にし、高さの取り分を指定する
+        // 各領域の「最低これだけは欲しい高さ」と「余りの取り分」を指定する。
+        // minHeightを一律60にしていたため、手札が90pxまで潰れてカードが
+        // 0.5px相当になっていた。手札は操作対象なので厚めに確保する。
+        // 高さは「GameBoardの何割か」で決める。
+        // minHeight/preferredHeightを混ぜると、VerticalLayoutGroupが
+        // preferredを優先して比率配分が崩れるため、preferredで明示する。
+        float boardH = boardRt.rect.height > 100f ? boardRt.rect.height : canvasHeight - 240f;
+        SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", boardH * 0.56f, 200f);
+        SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", boardH * 0.18f, 110f);
+        // 確定/次へボタンの席を、手札の前にあらかじめ確保しておく。
+        // ボタンを後から重ねる形にすると、表示/非表示のたびに
+        // 手札の位置がずれたり重なったりするため。
+        EnsureActionButtonSlot(canvasTf, boardRt);
+        SetBoardSlotAbs(canvasTf, boardRt, "MyCardParent", boardH * 0.26f, 140f);
 
-        // --- フォントサイズを基準解像度に合わせる ---
-        // シーン上に14や32など小さい固定値のまま残っているものがあるため、ここで統一する。
+        // 「今出したカード」の帯はUIEventsManager側で設定する。
+        // (このメソッドはPlayedCardsParentが生成される前に走ることがあり、
+        //  ここでFindしても取得できないため)
+
+        // 確定/次へボタンの配置はEnsureActionButtonSlotで行う(席を固定確保する)。
+
         SetFontRange(canvasTf, "BtnConfirmCard", 16f, 44f);
         SetFontRange(canvasTf, "BtnNextRound", 16f, 44f);
         SetFontRange(canvasTf, "RoomId", 16f, 40f);
@@ -490,6 +495,111 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             tmp.fontSizeMin = min;
             tmp.fontSizeMax = max;
         }
+    }
+
+    // 確定/次へボタンのための「席」を作る。
+    // ボタン自体は表示/非表示が切り替わるが、席は常に確保しておくことで
+    // ボタンの有無で他の要素の位置が動かないようにする。
+    private static void EnsureActionButtonSlot(Transform canvasTf, RectTransform board)
+    {
+        var slot = board.Find("ActionButtonSlot") as RectTransform;
+        if (slot == null)
+        {
+            var go = new GameObject("ActionButtonSlot");
+            go.transform.SetParent(board, false);
+            slot = go.AddComponent<RectTransform>();
+        }
+        var le = slot.GetComponent<UnityEngine.UI.LayoutElement>();
+        if (le == null) le = slot.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
+        le.flexibleHeight = 0f;   // 余りは分け合わず、固定の高さだけ取る
+        le.minHeight = 100f;
+        le.preferredHeight = 100f;
+
+        // ボタンを席の中央に置く(表示状態は各機能側が制御する)
+        foreach (var name in new[] { "BtnConfirmCard", "BtnNextRound" })
+        {
+            var btn = canvasTf.Find(name) as RectTransform;
+            if (btn == null) btn = slot.Find(name) as RectTransform;
+            if (btn == null) continue;
+            if (btn.parent != slot) btn.SetParent(slot, false);
+            btn.anchorMin = new Vector2(0.5f, 0.5f);
+            btn.anchorMax = new Vector2(0.5f, 0.5f);
+            btn.pivot = new Vector2(0.5f, 0.5f);
+            btn.anchoredPosition = Vector2.zero;
+            btn.sizeDelta = new Vector2(340f, 90f);
+        }
+    }
+
+    // ゲーム盤の高さ配分を適用し直す。
+    // PlayedCardsParentは実行時に生成されるため、生成後に呼ぶ必要がある。
+    public void ReapplyBoardSlots()
+    {
+        var board = transform.Find("GameBoard") as RectTransform;
+        if (board == null) return;
+        float boardH = board.rect.height > 100f ? board.rect.height : GetActualCanvasSize().y - 240f;
+        SetBoardSlotAbs(transform, board, "OthersCardParent", boardH * 0.56f, 200f);
+        SetBoardSlotAbs(transform, board, "PlayedCardsParent", boardH * 0.18f, 110f);
+        SetBoardSlotAbs(transform, board, "MyCardParent", boardH * 0.26f, 140f);
+
+        // 並び順: 一覧 → 今出したカード → ボタン → 手札
+        var oc = board.Find("OthersCardParent");
+        var pc = board.Find("PlayedCardsParent");
+        var ab = board.Find("ActionButtonSlot");
+        var mc = board.Find("MyCardParent");
+        if (oc != null) oc.SetSiblingIndex(0);
+        if (pc != null) pc.SetSiblingIndex(1);
+        if (ab != null) ab.SetSiblingIndex(2);
+        if (mc != null) mc.SetSiblingIndex(3);
+    }
+
+    // 高さを実数で指定して組み込む。
+    // flexibleHeightによる比率配分は、他の要素がpreferredHeightを持つと
+    // そちらが優先されて崩れるため、全要素をpreferredで揃える。
+    private static void SetBoardSlotAbs(Transform canvasTf, RectTransform board, string name, float height, float minHeight)
+    {
+        var rt = canvasTf.Find(name) as RectTransform;
+        if (rt == null) rt = board.Find(name) as RectTransform;
+        if (rt == null) return;
+        if (rt.parent != board) rt.SetParent(board, false);
+
+        rt.anchorMin = new Vector2(0f, 1f);
+        rt.anchorMax = new Vector2(0f, 1f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.localScale = Vector3.one;
+
+        var le = rt.GetComponent<UnityEngine.UI.LayoutElement>();
+        if (le == null) le = rt.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
+        le.flexibleHeight = 0f;
+        le.minHeight = minHeight;
+        le.preferredHeight = Mathf.Max(height, minHeight);
+    }
+
+    // ゲーム本体の縦配分コンテナに、指定した要素を組み込む。
+    // flexibleHeightで「余った高さをどの比率で分け合うか」を指定し、
+    // 実際の高さ計算はVerticalLayoutGroupに任せる。
+    private static void SetBoardSlot(Transform canvasTf, RectTransform board, string name, float weight, float minHeight)
+    {
+        var rt = canvasTf.Find(name) as RectTransform;
+        if (rt == null)
+        {
+            // まだ生成されていない要素(PlayedCardsParent等)は、
+            // 生成側で親をGameBoardにするので、ここでは何もしない
+            return;
+        }
+        if (rt.parent != board) rt.SetParent(board, false);
+
+        // LayoutGroupが子のサイズを制御できるようにリセットする。
+        // シーンに保存されたアンカーやsizeDeltaが残っていると、
+        // 100x100のまま潰れて表示されることがある。
+        rt.anchorMin = new Vector2(0f, 1f);
+        rt.anchorMax = new Vector2(0f, 1f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.localScale = Vector3.one;
+
+        var le = rt.GetComponent<UnityEngine.UI.LayoutElement>();
+        if (le == null) le = rt.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
+        le.flexibleHeight = weight;
+        le.minHeight = minHeight;
     }
 
     // アンカーを指定して位置・サイズを設定する。

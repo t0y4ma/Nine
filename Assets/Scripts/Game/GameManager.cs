@@ -15,7 +15,7 @@ public class GameManager : NetworkBehaviour
     public readonly SyncList<string> roundHistoryLog = new();
     private int roundsPlayed = 0;
 
-    private const float ROUND_TRANSITION_DELAY = 2.5f; // 最大の緩衝時間(秒)。全員がNextを押せばこれより早く進む
+    private const float ROUND_TRANSITION_DELAY = 5.0f; // 最大の緩衝時間(秒)。全員がNextを押せばこれより早く進む
     private const float TRANSITION_PROGRESS_SEND_INTERVAL = 0.1f; // 進捗バー送信間隔(秒)
     private const float ROUND_TIME_LIMIT = 45f; // ラウンドの制限時間(30~60秒の間)
     private const float ROUND_TIME_CHMIN = 3f; // 全員が確定した後、残り時間をこの秒数まで短縮する
@@ -48,6 +48,12 @@ public class GameManager : NetworkBehaviour
         // roundHistoryLogへの追加をUIの履歴パネルに反映するための購読。
         // SyncListのCallbackはクライアント側で明示的に登録する必要がある。
         roundHistoryLog.Callback += OnRoundHistoryChanged;
+
+        // Callbackは購読後の変更しか拾わない。
+        // 後から入室した場合や、スポーン時点で既に履歴がある場合に
+        // 表示が空のままになるため、既存分をここで反映する。
+        for (int i = 0; i < roundHistoryLog.Count; i++)
+            OnRoundHistoryChanged(SyncList<string>.Operation.OP_ADD, i, null, roundHistoryLog[i]);
     }
 
     private void OnRoundHistoryChanged(SyncList<string>.Operation op, int index, string oldItem, string newItem)
@@ -282,7 +288,7 @@ public class GameManager : NetworkBehaviour
             playerCom.isReadyForNextRound = false;
         }
 
-        RpcRevealBoard();
+        RpcRevealBoard(new int[lastRevealedPicks.Count], roundWins.ToArray()); // カードは0=未提出に戻し、得点は維持
 
         StartRound();
     }
@@ -374,7 +380,8 @@ public class GameManager : NetworkBehaviour
         roundHistoryLog.Add(roundsPlayed + "|" + cardsCsv + "|" + winnerId + "|" + (tie ? "1" : "0") + "|" + resultLabel);
 
         RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie);
-        RpcRevealBoard();
+        // 公開値を明示的に渡すことで、遷移が始まった直後から表示されるようにする
+        RpcRevealBoard(lastRevealedPicks.ToArray(), roundWins.ToArray());
     }
 
     [ClientRpc]
@@ -389,11 +396,20 @@ public class GameManager : NetworkBehaviour
         uiManager.ShowResult(message);
     }
 
-[ClientRpc]
-    private void RpcRevealBoard()
+    // 公開されたカードをRpcの引数で直接渡す。
+    // SyncList(lastRevealedPicks)の同期はRpcと到着順が保証されないため、
+    // SyncListに依存すると「次のラウンドになってから前ラウンドのカードが出る」
+    // という表示遅延が起きていた。
+    [ClientRpc]
+    private void RpcRevealBoard(int[] revealedPicks, int[] scores) // Mirrorの制約でRpcに省略可能引数は使えない
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         if (uiManager == null) return;
+
+        // 公開カードと得点をRpcの引数で直接渡す。
+        // SyncListの同期はRpcと到着順が保証されないため、表示にはこちらを優先する。
+        if (revealedPicks != null) uiManager.SetRevealedPicksOverride(revealedPicks);
+        if (scores != null) uiManager.SetScoresOverride(scores);
 
         // 時間切れでランダムに選ばれたカードも含め、自分の手札ビューを更新する
         var localPlayer = uiManager.GetDebugOrLocalPlayer();
