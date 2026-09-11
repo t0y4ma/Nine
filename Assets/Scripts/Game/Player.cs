@@ -75,10 +75,34 @@ public class Player : NetworkBehaviour
         uiManager?.RefreshLobbyPanels();
     }
 
-    private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
+    public override void OnStartClient()
+    {
+        base.OnStartClient();
+        // usedはSyncListなので、変更を購読しないとUIに反映されない。
+        // (これが無かったため、自分がカードを出しても手札がグレーにならず、
+        //  他プレイヤーの更新で盤面が再描画されたときに初めて反映されていた)
+        used.Callback += OnUsedChanged;
+    }
+
+    public override void OnStopClient()
+    {
+        used.Callback -= OnUsedChanged;
+        base.OnStopClient();
+    }
+
+    private void OnUsedChanged(SyncList<bool>.Operation op, int index, bool oldItem, bool newItem)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
-        uiManager?.RefreshRoundResultPanel();
+        uiManager?.RefreshBoardViews();
+    }
+
+    private void OnIsReadytoTurnChanged(bool oldVal, bool newVal)
+    {
+        // 提出状態が変わったので、盤面の表示を更新する。
+        // 以前は廃止済みのRoundResultPanelだけを更新しており、
+        // 手札のグレーアウトや「今出したカード」に反映されていなかった。
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshBoardViews();
     }
 
     [Command]

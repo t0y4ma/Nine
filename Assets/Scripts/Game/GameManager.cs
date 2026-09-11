@@ -49,11 +49,41 @@ public class GameManager : NetworkBehaviour
         // SyncListのCallbackはクライアント側で明示的に登録する必要がある。
         roundHistoryLog.Callback += OnRoundHistoryChanged;
 
+        // 全プレイヤーの使用済み状況も、変更を購読して盤面に反映する。
+        // 購読が無いと、他プレイヤーがカードを出しても一覧が更新されない。
+        used_Players.Callback += OnUsedPlayersChanged;
+        // 得点と公開カードも購読しておく。
+        // 通常はRpcで直接渡しているが、Rpcを取りこぼした場合や
+        // 途中参加時に、SyncListの同期で表示が追いつくようにするため。
+        roundWins.Callback += OnScoreOrPicksChanged;
+        lastRevealedPicks.Callback += OnScoreOrPicksChanged;
+
         // Callbackは購読後の変更しか拾わない。
         // 後から入室した場合や、スポーン時点で既に履歴がある場合に
         // 表示が空のままになるため、既存分をここで反映する。
         for (int i = 0; i < roundHistoryLog.Count; i++)
             OnRoundHistoryChanged(SyncList<string>.Operation.OP_ADD, i, null, roundHistoryLog[i]);
+    }
+
+    public override void OnStopClient()
+    {
+        used_Players.Callback -= OnUsedPlayersChanged;
+        roundWins.Callback -= OnScoreOrPicksChanged;
+        lastRevealedPicks.Callback -= OnScoreOrPicksChanged;
+        roundHistoryLog.Callback -= OnRoundHistoryChanged;
+        base.OnStopClient();
+    }
+
+    private void OnScoreOrPicksChanged(SyncList<int>.Operation op, int index, int oldItem, int newItem)
+    {
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshBoardViews();
+    }
+
+    private void OnUsedPlayersChanged(SyncList<bool>.Operation op, int index, bool oldItem, bool newItem)
+    {
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.RefreshBoardViews();
     }
 
     private void OnRoundHistoryChanged(SyncList<string>.Operation op, int index, string oldItem, string newItem)
@@ -167,7 +197,11 @@ public class GameManager : NetworkBehaviour
         var actingPlayer = room.playerComponents[id];
         actingPlayer.isReadytoTurn = true; // "確定済み"のシグナルのみ公開(値は非公開)。ラウンド終了はタイマーが判断する
 
-        RpcRefreshMyHand(); // 自分の手札ビューだけ更新(他人には見せない)
+        // 手札(自分のみ)と、盤面全体(誰が提出済みかの「?」表示)を更新する。
+        // 以前はRpcRefreshMyHandだけだったため、他プレイヤーの提出が
+        // 「今出したカード」に反映されなかった。
+        RpcRefreshMyHand();
+        RpcRefreshBoard();
 
         return true;
     }
@@ -394,6 +428,9 @@ public class GameManager : NetworkBehaviour
             ? ("Round " + roundNumber + "/" + totalRounds + ": tie")
             : ("Round " + roundNumber + "/" + totalRounds + ": Player " + winnerId + " wins the round");
         uiManager.ShowResult(message);
+        // 結果を画面中央に大きく表示する(遷移時間のあいだだけ)
+        uiManager.ShowRoundResultPopup(lastRevealedPicks.ToArray(), winnerId, tie, message,
+            ROUND_TRANSITION_DELAY * 0.85f);
     }
 
     // 公開されたカードをRpcの引数で直接渡す。
@@ -411,13 +448,16 @@ public class GameManager : NetworkBehaviour
         if (revealedPicks != null) uiManager.SetRevealedPicksOverride(revealedPicks);
         if (scores != null) uiManager.SetScoresOverride(scores);
 
+
+
         // 時間切れでランダムに選ばれたカードも含め、自分の手札ビューを更新する
         var localPlayer = uiManager.GetDebugOrLocalPlayer();
         if (localPlayer != null)
             uiManager.RefreshMyCardView(localPlayer.used.ToList(), localPlayer.used.Count);
 
+        // RefreshAllCardViewの中で「今出したカード」も更新される。
+        // (RefreshRoundResultPanelは廃止済みのパネル用なので呼ばない)
         uiManager.RefreshAllCardView(used_Players.ToList(), CARDCOUNT);
-        uiManager.RefreshRoundResultPanel();
     }
 
     [Server]
@@ -510,7 +550,8 @@ public class GameManager : NetworkBehaviour
         if (localPlayer != null)
             uiManager.RefreshMyCardView(localPlayer.used.ToList(), localPlayer.used.Count);
 
+        // RefreshAllCardViewの中で「今出したカード」も更新される。
+        // (RefreshRoundResultPanelは廃止済みのパネル用なので呼ばない)
         uiManager.RefreshAllCardView(used_Players.ToList(), CARDCOUNT);
-        uiManager.RefreshRoundResultPanel();
     }
 }

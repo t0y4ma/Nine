@@ -1014,6 +1014,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
     private void LateUpdate()
     {
+        // ラウンド結果ポップアップの更新/自動クローズ
+        UpdateResultPopup();
+
         // 画面サイズが変わっていたらカードサイズを再計算する
         RequeueCardFitIfResized();
 
@@ -1351,8 +1354,17 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             ownerText.color = isMe ? new Color(1f, 0.85f, 0.25f, 1f) : new Color(0.85f, 0.88f, 0.92f, 1f);
 
             var num = slot.Find("Card").GetComponent<NumberCardUI>();
-            var pl = (gm != null && gm.room != null && i < gm.room.playerComponents.Count)
-                ? gm.room.playerComponents[i] : null;
+            // gm.roomはクライアント側では未同期のことがあるため、
+            // シーン上のPlayerから直接探す方が確実。
+            // (roomがnullだと提出済みでも「?」にならず「-」のままになる)
+            Player pl = null;
+            if (gm != null && gm.room != null && i < gm.room.playerComponents.Count)
+                pl = gm.room.playerComponents[i];
+            if (pl == null)
+            {
+                foreach (var p in FindObjectsByType<Player>(FindObjectsSortMode.None))
+                    if (p.gameManager == gm && p.playerId == i) { pl = p; break; }
+            }
 
             int revealed;
             if (_revealedPicksOverride != null && i < _revealedPicksOverride.Length)
@@ -1690,6 +1702,187 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
     // ラウンドの選択状況・結果一覧を更新する。
     // 各プレイヤーについて、選択済みだが未公開なら"?"、未選択なら"-"、公開済みなら実際の数字を表示する。
+    // ラウンド結果のポップアップ。
+    // 「今出したカード」と同じ内容を、画面中央に大きく別表示する。
+    // 元のUIには手を加えないので、閉じたあとの見た目が変わらない。
+    private GameObject _resultPopup;
+    private float _resultPopupUntil = 0f;
+
+    public void ShowRoundResultPopup(int[] picks, int winnerId, bool tie, string message, float seconds)
+    {
+        EnsureResultPopup();
+        _resultPopupUntil = Time.time + seconds;
+
+        var body = _resultPopup.transform.Find("Body");
+        var title = body.Find("Title").GetComponent<TextMeshProUGUI>();
+        title.text = message;
+
+        var rowTf = body.Find("Cards");
+        int n = picks != null ? picks.Length : 0;
+
+        while (rowTf.childCount < n) CreateResultSlot(rowTf);
+        for (int i = 0; i < rowTf.childCount; i++)
+        {
+            var slot = rowTf.GetChild(i);
+            slot.gameObject.SetActive(i < n);
+            if (i >= n) continue;
+
+            var num = slot.Find("Card").GetComponent<NumberCardUI>();
+            num.SetupDisplay(picks[i] > 0 ? picks[i].ToString() : "-");
+            // 勝者のカードだけ強調する
+            num.SetSelected(!tie && i == winnerId);
+
+            var lbl = slot.Find("OwnerLabel").GetComponent<TextMeshProUGUI>();
+            bool isWinner = !tie && i == winnerId;
+            lbl.text = "P" + i + (isWinner ? " WIN" : "");
+            lbl.color = isWinner ? new Color(1f, 0.85f, 0.25f, 1f) : new Color(0.85f, 0.88f, 0.92f, 1f);
+        }
+
+        _resultPopup.SetActive(true);
+        _resultPopup.transform.SetAsLastSibling();
+        _pendingResultPopupFit = n;
+    }
+
+    private int _pendingResultPopupFit = 0;
+
+    private void EnsureResultPopup()
+    {
+        if (_resultPopup != null) return;
+        var canvasTf = othersCardParent.transform.parent.parent; // GameBoard の親 = Canvas
+
+        _resultPopup = new GameObject("RoundResultPopup");
+        _resultPopup.transform.SetParent(canvasTf, false);
+        var rt = _resultPopup.AddComponent<RectTransform>();
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero;
+        rt.offsetMax = Vector2.zero;
+        var dim = _resultPopup.AddComponent<UnityEngine.UI.Image>();
+        dim.color = new Color(0f, 0f, 0f, 0.72f);   // 背景を暗くして結果を目立たせる
+
+        // 中身(タイトル + カード列)を縦に並べる
+        var body = new GameObject("Body");
+        body.transform.SetParent(_resultPopup.transform, false);
+        var brt = body.AddComponent<RectTransform>();
+        brt.anchorMin = new Vector2(0.05f, 0.25f);
+        brt.anchorMax = new Vector2(0.95f, 0.75f);
+        brt.offsetMin = Vector2.zero;
+        brt.offsetMax = Vector2.zero;
+        var bvl = body.AddComponent<VerticalLayoutGroup>();
+        bvl.childAlignment = TextAnchor.MiddleCenter;
+        bvl.spacing = 20f;
+        bvl.childControlWidth = true;
+        bvl.childControlHeight = true;
+        bvl.childForceExpandWidth = true;
+        bvl.childForceExpandHeight = false;
+
+        var titleGo = new GameObject("Title");
+        titleGo.transform.SetParent(body.transform, false);
+        titleGo.AddComponent<RectTransform>();
+        var t = titleGo.AddComponent<TextMeshProUGUI>();
+        t.enableAutoSizing = true;
+        t.fontSizeMin = 18;
+        t.fontSizeMax = 90;
+        t.textWrappingMode = TextWrappingModes.NoWrap;
+        t.alignment = TextAlignmentOptions.Center;
+        t.raycastTarget = false;
+        var tle = titleGo.AddComponent<LayoutElement>();
+        tle.flexibleHeight = 0.3f;
+        tle.minHeight = 40f;
+
+        var cards = new GameObject("Cards");
+        cards.transform.SetParent(body.transform, false);
+        cards.AddComponent<RectTransform>();
+        var chl = cards.AddComponent<HorizontalLayoutGroup>();
+        chl.childAlignment = TextAnchor.MiddleCenter;
+        chl.spacing = 28f;
+        chl.childControlWidth = true;
+        chl.childControlHeight = true;
+        chl.childForceExpandWidth = false;
+        chl.childForceExpandHeight = false;
+        var cle = cards.AddComponent<LayoutElement>();
+        cle.flexibleHeight = 1f;
+        cle.minHeight = 80f;
+    }
+
+    // ポップアップ用の1枚分(カード + 名前)
+    private void CreateResultSlot(Transform parent)
+    {
+        var slot = new GameObject("ResultSlot" + parent.childCount);
+        slot.transform.SetParent(parent, false);
+        slot.AddComponent<RectTransform>();
+        var vl = slot.AddComponent<VerticalLayoutGroup>();
+        vl.childAlignment = TextAnchor.MiddleCenter;
+        vl.spacing = 8f;
+        vl.childControlWidth = true;
+        vl.childControlHeight = true;
+        vl.childForceExpandWidth = false;
+        vl.childForceExpandHeight = false;
+        slot.AddComponent<LayoutElement>();
+
+        var card = Instantiate(cardUI, slot.transform);
+        card.name = "Card";
+        var b = card.GetComponent<UnityEngine.UI.Button>();
+        if (b != null) b.interactable = false;
+        SetupAutoCard(card);
+
+        var go = new GameObject("OwnerLabel");
+        go.transform.SetParent(slot.transform, false);
+        go.AddComponent<RectTransform>();
+        var t = go.AddComponent<TextMeshProUGUI>();
+        t.enableAutoSizing = true;
+        t.fontSizeMin = 10;
+        t.fontSizeMax = 44;
+        t.textWrappingMode = TextWrappingModes.NoWrap;
+        t.alignment = TextAlignmentOptions.Center;
+        t.raycastTarget = false;
+        var le = go.AddComponent<LayoutElement>();
+        le.flexibleHeight = 0.28f;
+    }
+
+    private void UpdateResultPopup()
+    {
+        // 表示中のサイズ決定(レイアウト確定後に行う)
+        if (_pendingResultPopupFit > 0 && _resultPopup != null && _resultPopup.activeSelf)
+        {
+            var cardsRt = _resultPopup.transform.Find("Body/Cards") as RectTransform;
+            if (cardsRt != null && cardsRt.rect.height > 40f && cardsRt.rect.width > 40f)
+            {
+                int n = _pendingResultPopupFit;
+                float ch = cardsRt.rect.height * 0.7f;
+                float cw = ch * (CARD_W / CARD_H);
+                float maxW = (cardsRt.rect.width - 28f * (n - 1)) / n;
+                if (cw > maxW) { cw = maxW; ch = cw * (CARD_H / CARD_W); }
+                for (int i = 0; i < n && i < cardsRt.childCount; i++)
+                {
+                    var le = cardsRt.GetChild(i).Find("Card").GetComponent<LayoutElement>();
+                    if (le == null) continue;
+                    le.preferredWidth = cw; le.preferredHeight = ch;
+                    le.minWidth = cw; le.minHeight = ch;
+                }
+                LayoutRebuilder.ForceRebuildLayoutImmediate(cardsRt);
+                _pendingResultPopupFit = 0;
+            }
+        }
+
+        // 表示時間が過ぎたら閉じる
+        if (_resultPopup != null && _resultPopup.activeSelf && Time.time >= _resultPopupUntil)
+            _resultPopup.SetActive(false);
+    }
+
+    // 盤面(手札・使用済み一覧・今出したカード)をまとめて更新する。
+    // 提出状態が変わったときに呼ぶことで、自分の操作が即座に反映される。
+    public void RefreshBoardViews()
+    {
+        var localPlayer = GetDebugOrLocalPlayer();
+        var gm = localPlayer != null ? localPlayer.gameManager : null;
+        if (gm == null) return;
+
+        if (localPlayer != null)
+            RefreshMyCardView(localPlayer.used.ToList(), localPlayer.used.Count);
+        RefreshAllCardView(gm.used_Players.ToList(), gm.CARDCOUNT);
+    }
+
     public void RefreshRoundResultPanel()
     {
         if (roundResultPanel == null || cardUI == null) return;
