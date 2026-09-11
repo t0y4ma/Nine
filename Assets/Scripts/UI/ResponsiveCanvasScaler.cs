@@ -301,7 +301,14 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // 高さは「GameBoardの何割か」で決める。
         // minHeight/preferredHeightを混ぜると、VerticalLayoutGroupが
         // preferredを優先して比率配分が崩れるため、preferredで明示する。
-        float boardH = boardRt.rect.height > 100f ? boardRt.rect.height : canvasHeight - 240f;
+        // boardRt.rect.heightはCanvas座標、canvasHeightは実ピクセル。
+        // 単位が違うため、フォールバック時はscaleFactorで割ってCanvas座標に揃える。
+        // (WebGLのscaleFactor=2の環境では2倍の値になり、各領域が過大に確保されていた)
+        var cvForBoard = GetComponent<Canvas>();
+        float sfBoard = (cvForBoard != null && cvForBoard.scaleFactor > 0.01f) ? cvForBoard.scaleFactor : 1f;
+        float boardH = boardRt.rect.height > 100f
+            ? boardRt.rect.height
+            : (canvasHeight / sfBoard) - 240f;
         SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", boardH * 0.56f, 200f);
         SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", boardH * 0.18f, 110f);
         // 確定/次へボタンの席を、手札の前にあらかじめ確保しておく。
@@ -536,7 +543,11 @@ public class ResponsiveCanvasScaler : MonoBehaviour
     {
         var board = transform.Find("GameBoard") as RectTransform;
         if (board == null) return;
-        float boardH = board.rect.height > 100f ? board.rect.height : GetActualCanvasSize().y - 240f;
+        var cvR = GetComponent<Canvas>();
+        float sfR = (cvR != null && cvR.scaleFactor > 0.01f) ? cvR.scaleFactor : 1f;
+        float boardH = board.rect.height > 100f
+            ? board.rect.height
+            : (GetActualCanvasSize().y / sfR) - 240f;
         SetBoardSlotAbs(transform, board, "OthersCardParent", boardH * 0.56f, 200f);
         SetBoardSlotAbs(transform, board, "PlayedCardsParent", boardH * 0.18f, 110f);
         SetBoardSlotAbs(transform, board, "MyCardParent", boardH * 0.26f, 140f);

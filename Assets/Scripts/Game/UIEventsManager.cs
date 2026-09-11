@@ -969,8 +969,54 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     private readonly List<(Transform row, int count)> _pendingCardFit = new();
     private int _pendingPlayedFit = 0;   // 「今出したカード」の適用待ち人数
 
+    // 画面サイズを監視し、変わったらカードサイズを計算し直す。
+    // WebGLはブラウザのリサイズやデバイス回転で頻繁にサイズが変わるため、
+    // 一度計算して終わりにすると古いサイズのまま残ってしまう。
+    private Vector2 _lastLayoutSize;
+
+    private void RequeueCardFitIfResized()
+    {
+        if (othersCardParent == null) return;
+        var rt = othersCardParent.GetComponent<RectTransform>();
+        var now = new Vector2(rt.rect.width, rt.rect.height);
+        if ((now - _lastLayoutSize).sqrMagnitude < 1f) return;
+        _lastLayoutSize = now;
+
+        // 一覧の各カード行を再登録
+        foreach (Transform row in othersCardParent.transform)
+        {
+            if (!row.gameObject.activeSelf) continue;
+            foreach (Transform blk in row)
+            {
+                if (!blk.gameObject.activeSelf) continue;
+                var rows = blk.Find("CardRows");
+                if (rows == null) continue;
+                int cnt = 0;
+                foreach (Transform c in rows) if (c.gameObject.activeSelf) cnt++;
+                if (cnt > 0) _pendingCardFit.Add((rows, cnt));
+            }
+        }
+        // 手札
+        if (myCardParent != null && myCardParent.activeSelf)
+        {
+            int cnt = 0;
+            foreach (Transform c in myCardParent.transform) if (c.gameObject.activeSelf) cnt++;
+            if (cnt > 0) _pendingCardFit.Add((myCardParent.transform, cnt));
+        }
+        // 今出したカード
+        if (playedCardsParent != null && playedCardsParent.activeSelf)
+        {
+            int cnt = 0;
+            foreach (Transform c in playedCardsParent.transform) if (c.gameObject.activeSelf) cnt++;
+            if (cnt > 0) _pendingPlayedFit = cnt;
+        }
+    }
+
     private void LateUpdate()
     {
+        // 画面サイズが変わっていたらカードサイズを再計算する
+        RequeueCardFitIfResized();
+
         // 「今出したカード」: 帯の実サイズからカードサイズを決める
         if (_pendingPlayedFit > 0 && playedCardsParent != null)
         {
@@ -1002,11 +1048,17 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         if (_pendingCardFit.Count == 0) return;
 
-        foreach (var (row, count) in _pendingCardFit)
+        // 適用できたものだけをリストから外す。
+        // サイズ未確定のままクリアしてしまうと、その項目は二度と
+        // 処理されず、カードが極小のまま残ってしまう。
+        // (エディタは初期化が速く偶然1フレーム目で確定するが、
+        //  WebGLでは間に合わずこの問題が表面化していた)
+        for (int idx = _pendingCardFit.Count - 1; idx >= 0; idx--)
         {
-            if (row == null) continue;
+            var (row, count) = _pendingCardFit[idx];
+            if (row == null) { _pendingCardFit.RemoveAt(idx); continue; }
             var rowRt = row as RectTransform;
-            if (rowRt == null) continue;
+            if (rowRt == null) { _pendingCardFit.RemoveAt(idx); continue; }
 
             // 手札(MyCardParent)は自分自身が並べる枠。
             // 一覧のCardRowsは親ブロックからラベル分を引いた残りが使える。
@@ -1021,7 +1073,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             else
             {
                 var block = row.parent as RectTransform;
-                if (block == null) continue;
+                if (block == null) { _pendingCardFit.RemoveAt(idx); continue; }
                 float labelH = 0f;
                 var label = block.Find("Label") as RectTransform;
                 if (label != null) labelH = label.rect.height;
@@ -1029,10 +1081,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
                 h = block.rect.height - labelH - 8f;
                 spacing = 4f;
             }
-            if (h < 20f || w < 20f) continue;   // まだ確定していない
+            // まだ確定していなければ、リストに残して次のフレームで再挑戦する
+            if (h < 20f || w < 20f) continue;
+
             FitCardsInRow(row, count, spacing, w, h);
+            _pendingCardFit.RemoveAt(idx);
         }
-        _pendingCardFit.Clear();
     }
 
     // カード列の高さと幅を「呼び出し側から実数で」受け取り、
