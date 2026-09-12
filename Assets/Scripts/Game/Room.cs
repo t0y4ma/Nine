@@ -42,6 +42,23 @@ public class Room
     public void RemovePlayer(NetworkConnectionToClient player)
     {
         var playerCom = player.identity.GetComponent<Player>();
+
+        // ゲーム進行中に抜けた場合は、リストから外さずドロップアウト扱いにする。
+        // 途中で人数が変わると、それ以降のラウンドで
+        // カードのインデックスがずれて集計が壊れるため。
+        // ドロップアウトしたプレイヤーは常に0(=未提出)を出したものとして扱う。
+        if (gameManager != null && gameManager.inProgress && playerCom != null)
+        {
+            playerCom.hasLeft = true;
+            playerCom.isReadytoTurn = true;   // 待たずにラウンドを進める
+            playerCom.inRoom = false;
+            playerCom.isRoomHost = false;
+            player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;
+            players.Remove(player);           // 接続だけ外す(集計用のリストは維持)
+            gameManager.RefreshLobbyStatus();
+            return;
+        }
+
         players.Remove(player);
         playerComponents.Remove(playerCom);
         player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;

@@ -5,7 +5,21 @@ using UnityEngine;
 
 public class Player : NetworkBehaviour
 {
-    public Room room;
+    public Room room;   // サーバー側のみ有効(クライアントではnull)
+
+    // 自分がどの部屋にいるかを、本人にだけ伝える。
+    // SyncVarにすると全クライアントに配信され、他人の部屋IDまで
+    // 読めてしまうため、TargetRpcで所有者だけに送る。
+    [HideInInspector] public string myRoomId = "";
+
+    [TargetRpc]
+    public void TargetSetRoomId(NetworkConnection target, string roomId)
+    {
+        myRoomId = roomId;
+    }
+
+    // ゲームから抜けたプレイヤー。以降のラウンドでは常に0を出す扱いにする。
+    [SyncVar] public bool hasLeft = false;
 
     [SyncVar]
     public string playerName;
@@ -39,6 +53,12 @@ public class Player : NetworkBehaviour
 
     public void Setup(Room room, int playerId)
     {
+        // 部屋IDは本人にだけ通知する(他人には見せない)
+        if (room != null && connectionToClient != null)
+        {
+            myRoomId = room.roomId;   // サーバー側にも保持
+            TargetSetRoomId(connectionToClient, room.roomId);
+        }
         this.room = room;
         this.playerId = playerId;
         int cardCnt = room.gameManager.CARDCOUNT;

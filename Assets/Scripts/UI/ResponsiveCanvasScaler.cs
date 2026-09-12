@@ -241,19 +241,21 @@ public class ResponsiveCanvasScaler : MonoBehaviour
 
         // --- 上部: ボタン ---
         Vector2 topBtnSize = new Vector2(220f, 70f);
-        SetAnchoredRect(canvasTf, "BtnLeaveRoom", new Vector2(0f, 1f), new Vector2(40f, -20f), topBtnSize);
-        SetAnchoredRect(canvasTf, "BtnHistory", new Vector2(1f, 1f), new Vector2(-40f, -20f), topBtnSize);
+        // 上部要素は画面高の割合で配置し、合計が20%に収まるようにする。
+        // 固定値だと解像度によって過剰/不足が生じ、
+        // 盤面(GameBoard)に回せる高さが変わってしまう。
+        float topH = canvasHeight * 0.20f;
+        float btnH = topH * 0.36f;
+        SetAnchoredRect(canvasTf, "BtnLeaveRoom", new Vector2(0f, 1f),
+            new Vector2(40f, -topH * 0.06f), new Vector2(btnH * 2.6f, btnH));
+        SetAnchoredRect(canvasTf, "BtnHistory", new Vector2(1f, 1f),
+            new Vector2(-40f, -topH * 0.06f), new Vector2(btnH * 2.6f, btnH));
 
-        // --- 上部: タイマーバー(左右に伸ばす) ---
-        StretchHorizontal(canvasTf, "RoundTimerBarPanel", 60f, -100f, 18f);
-        StretchHorizontal(canvasTf, "TransitionBarPanel", 60f, -124f, 18f);
+        float barH = Mathf.Max(10f, topH * 0.07f);
+        StretchHorizontal(canvasTf, "RoundTimerBarPanel", 60f, -(topH * 0.46f), barH);
+        StretchHorizontal(canvasTf, "TransitionBarPanel", 60f, -(topH * 0.46f + barH + 4f), barH);
 
-        // --- 上部: 状況テキスト ---
-        // 固定幅(1100)にすると、縦持ちなどCanvas幅がそれより狭い場合に画面外へはみ出す。
-        // 左右マージン指定のストレッチにして、常に画面内に収める。
-        StretchHorizontal(canvasTf, "StatusText", 40f, -145f, 70f);
-        // 背景(Bg)が親より外側に広がっていると、親を画面内に収めても背景がはみ出す。
-        // 親いっぱいにぴったり合わせる。
+        StretchHorizontal(canvasTf, "StatusText", 40f, -(topH * 0.62f), topH * 0.30f);
         var statusBg = canvasTf.Find("StatusText/Bg")?.GetComponent<RectTransform>();
         if (statusBg != null)
         {
@@ -282,13 +284,18 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // 画面端ギリギリまで使うと窮屈で見にくいため、左右に余白を取る。
         // 割合(1%)にしておけば、どの解像度でも同じ見た目の余白になる。
         float sideMargin = canvasWidth * 0.01f;
-        boardRt.offsetMin = new Vector2(sideMargin, 20f);
-        boardRt.offsetMax = new Vector2(-sideMargin, -220f);
+        // 上部はボタン/タイマーバー/StatusTextが占める。
+        // 固定220pxにしていたため、画面が大きいと過剰に、
+        // 小さいと不足していた。画面高の割合で確保する。
+        float topReserved = canvasHeight * 0.20f;
+        boardRt.offsetMin = new Vector2(sideMargin, canvasHeight * 0.01f);
+        boardRt.offsetMax = new Vector2(-sideMargin, -topReserved);
 
         var vl = boardRt.GetComponent<UnityEngine.UI.VerticalLayoutGroup>();
         if (vl == null) vl = boardRt.gameObject.AddComponent<UnityEngine.UI.VerticalLayoutGroup>();
         vl.childAlignment = TextAnchor.UpperCenter;
-        vl.spacing = 12f;
+        // 領域間の余白は最小限にし、その分を一覧に回す
+        vl.spacing = 4f;
         vl.childControlWidth = true;
         vl.childControlHeight = true;
         vl.childForceExpandWidth = true;
@@ -309,13 +316,14 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         float boardH = boardRt.rect.height > 100f
             ? boardRt.rect.height
             : (canvasHeight / sfBoard) - 240f;
-        SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", boardH * 0.56f, 200f);
-        SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", boardH * 0.18f, 110f);
+        float usableH2 = Mathf.Max(200f, boardH - 80f - 12f);
+        SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", usableH2 * 0.62f, 0f);
+        SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", usableH2 * 0.23f, 0f);
         // 確定/次へボタンの席を、手札の前にあらかじめ確保しておく。
         // ボタンを後から重ねる形にすると、表示/非表示のたびに
         // 手札の位置がずれたり重なったりするため。
         EnsureActionButtonSlot(canvasTf, boardRt);
-        SetBoardSlotAbs(canvasTf, boardRt, "MyCardParent", boardH * 0.26f, 140f);
+        SetBoardSlotAbs(canvasTf, boardRt, "MyCardParent", usableH2 * 0.15f, 0f);
 
         // 「今出したカード」の帯はUIEventsManager側で設定する。
         // (このメソッドはPlayedCardsParentが生成される前に走ることがあり、
@@ -519,8 +527,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         var le = slot.GetComponent<UnityEngine.UI.LayoutElement>();
         if (le == null) le = slot.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
         le.flexibleHeight = 0f;   // 余りは分け合わず、固定の高さだけ取る
-        le.minHeight = 100f;
-        le.preferredHeight = 100f;
+        // ボタンの高さ(76)ぶんあれば足りる。
+        // 余分に確保していた分を一覧に回す。
+        le.minHeight = 80f;
+        le.preferredHeight = 80f;
 
         // ボタンを席の中央に置く(表示状態は各機能側が制御する)
         foreach (var name in new[] { "BtnConfirmCard", "BtnNextRound" })
@@ -533,7 +543,7 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             btn.anchorMax = new Vector2(0.5f, 0.5f);
             btn.pivot = new Vector2(0.5f, 0.5f);
             btn.anchoredPosition = Vector2.zero;
-            btn.sizeDelta = new Vector2(340f, 90f);
+            btn.sizeDelta = new Vector2(320f, 76f);
         }
     }
 
@@ -548,9 +558,18 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         float boardH = board.rect.height > 100f
             ? board.rect.height
             : (GetActualCanvasSize().y / sfR) - 240f;
-        SetBoardSlotAbs(transform, board, "OthersCardParent", boardH * 0.56f, 200f);
-        SetBoardSlotAbs(transform, board, "PlayedCardsParent", boardH * 0.18f, 110f);
-        SetBoardSlotAbs(transform, board, "MyCardParent", boardH * 0.26f, 140f);
+        // ボタンの席(100)と行間(spacing 12 x 3)を先に差し引いてから配分する。
+        // 比率の合計を1.0のままボタンを足していたため、
+        // 合計が枠を超えて全体が圧縮されていた。
+        const float BUTTON_H = 80f;
+        float usableH = Mathf.Max(200f, boardH - BUTTON_H - 36f);
+        // 一覧は人数分を積むので厚めに。
+        // 「今出したカード」と手札は1行ぶんあれば足りる。
+        // 「今出したカード」と手札は1行だけだが、
+        // そのぶん1枚を大きく見せたいので最低高さを確保する。
+        SetBoardSlotAbs(transform, board, "OthersCardParent", usableH * 0.46f, 120f);
+        SetBoardSlotAbs(transform, board, "PlayedCardsParent", usableH * 0.28f, 150f);
+        SetBoardSlotAbs(transform, board, "MyCardParent", usableH * 0.26f, 140f);
 
         // 並び順: 一覧 → 今出したカード → ボタン → 手札
         var oc = board.Find("OthersCardParent");

@@ -219,6 +219,8 @@ public class GameManager : NetworkBehaviour
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.ShowRoundCutIn(roundNumber, totalRounds);
+        // 新ラウンドが始まったら前ラウンドの結果表示は消す
+        uiManager?.HideRoundResultPopup();
         // 前ラウンドの結果表示が残り続けないよう、新しいラウンドの開始時にクリアする
         uiManager?.ShowResult("");
     }
@@ -346,6 +348,11 @@ public class GameManager : NetworkBehaviour
         {
             if (playedCards[i] != 0) continue;
 
+            // 抜けたプレイヤーは自動選択の対象外。常に0(未提出)のままにする。
+            if (room != null && i < room.playerComponents.Count
+                && room.playerComponents[i] != null && room.playerComponents[i].hasLeft)
+                continue;
+
             var candidates = new List<int>();
             for (int c = 0; c < CARDCOUNT; c++)
             {
@@ -364,34 +371,38 @@ public class GameManager : NetworkBehaviour
             }
         }
 
-        int best = -1;
-        int winnerId = -1;
-        bool tie = false;
+        // 最大値を出したプレイヤーを全員求める。
+        // 同点でも「勝ちなし」にはせず、最大値の全員が同じ得点を得る。
+        int best = 0;
+        for (int i = 0; i < playedCards.Count; i++)
+            if (playedCards[i] > best) best = playedCards[i];
 
+        var winners = new List<int>();
         for (int i = 0; i < playedCards.Count; i++)
         {
-            if (playedCards[i] > best) { best = playedCards[i]; winnerId = i; tie = false; }
-            else if (playedCards[i] == best) tie = true;
-
+            if (playedCards[i] > 0 && playedCards[i] == best) winners.Add(i);
             // このラウンドで選んだ値を公開する(全員が選び終わったこのタイミングで初めて公開)
             if (playedCards[i] > 0) lastRevealedPicks[i] = playedCards[i];
         }
 
+        // tieは「複数人が最大値で並んだか」を表す(得点は発生する)
+        bool tie = winners.Count > 1;
+        int winnerId = winners.Count > 0 ? winners[0] : -1;
+
         int pointsGainedThisRound = 0;
-        if (!tie && winnerId >= 0)
+        if (winners.Count > 0)
         {
             int pointsToAdd = 1;
             if (ScoringMode == 1)
             {
-                // 相手(勝者以外)が出したカードの数字の合計を得点にする
+                // 最大値でなかったプレイヤーが出したカードの合計を得点にする。
+                // 同点の場合、勝者それぞれが同じだけ得る。
                 int sum = 0;
                 for (int i = 0; i < playedCards.Count; i++)
-                {
-                    if (i != winnerId) sum += playedCards[i];
-                }
-                pointsToAdd = Mathf.Max(1, sum); // 念のため最低1pt保証
+                    if (!winners.Contains(i)) sum += playedCards[i];
+                pointsToAdd = Mathf.Max(1, sum);
             }
-            roundWins[winnerId] = roundWins[winnerId] + pointsToAdd;
+            foreach (var w in winners) roundWins[w] = roundWins[w] + pointsToAdd;
             pointsGainedThisRound = pointsToAdd;
         }
 
@@ -400,37 +411,45 @@ public class GameManager : NetworkBehaviour
         // 履歴ログの1行を、クライアント側でリッチUIに変換できるよう構造化した形式で記録する。
         // 形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel"
         string resultLabel;
-        if (tie) resultLabel = "Tie";
-        else if (winnerId >= 0)
+        if (winners.Count == 0) resultLabel = "";
+        else
         {
-            string winnerName = (winnerId < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[winnerId].playerName))
-                ? room.playerComponents[winnerId].playerName
-                : ("P" + winnerId);
-            resultLabel = winnerName + " +" + pointsGainedThisRound + "pt";
+            // 同点なら勝者を連名で出す(全員が得点しているため)
+            var names = new List<string>();
+            foreach (var w in winners)
+            {
+                string n = (w < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[w].playerName))
+                    ? room.playerComponents[w].playerName : ("P" + w);
+                names.Add(n);
+            }
+            resultLabel = string.Join(" & ", names) + " +" + pointsGainedThisRound + "pt";
         }
-        else resultLabel = "";
 
         var cardsCsv = string.Join(",", playedCards);
         roundHistoryLog.Add(roundsPlayed + "|" + cardsCsv + "|" + winnerId + "|" + (tie ? "1" : "0") + "|" + resultLabel);
 
-        RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie);
+        RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie, lastRevealedPicks.ToArray());
         // 公開値を明示的に渡すことで、遷移が始まった直後から表示されるようにする
         RpcRevealBoard(lastRevealedPicks.ToArray(), roundWins.ToArray());
     }
 
     [ClientRpc]
-    private void RpcRoundResult(int roundNumber, int totalRounds, int winnerId, bool tie)
+    private void RpcRoundResult(int roundNumber, int totalRounds, int winnerId, bool tie, int[] picks)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         if (uiManager == null) return;
 
+        // 同点でも得点は入るので「引き分け」ではなく
+        // 「複数人が勝った」という表現にする
         string message = tie
-            ? ("Round " + roundNumber + "/" + totalRounds + ": tie")
+            ? ("Round " + roundNumber + "/" + totalRounds + ": multiple winners")
             : ("Round " + roundNumber + "/" + totalRounds + ": Player " + winnerId + " wins the round");
         uiManager.ShowResult(message);
         // 結果を画面中央に大きく表示する(遷移時間のあいだだけ)
-        uiManager.ShowRoundResultPopup(lastRevealedPicks.ToArray(), winnerId, tie, message,
-            ROUND_TRANSITION_DELAY * 0.85f);
+        // picksはRpcの引数で受け取る。
+        // SyncListを参照すると、同期が間に合わず空のまま表示されることがある。
+        uiManager.ShowRoundResultPopup(picks, winnerId, tie, message,
+            4f);   // 表示時間は4秒
     }
 
     // 公開されたカードをRpcの引数で直接渡す。

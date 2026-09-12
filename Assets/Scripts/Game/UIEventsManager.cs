@@ -85,6 +85,16 @@ public class UIEventsManager : NetworkBehaviour
 return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     }
 
+    private RectTransform GetCanvasRect()
+    {
+        if (_canvasRt == null)
+        {
+            var canvasGo = GameObject.Find("Canvas");
+            if (canvasGo != null) _canvasRt = canvasGo.GetComponent<RectTransform>();
+        }
+        return _canvasRt;
+    }
+
     private float GetCanvasHeight()
     {
         if (_canvasRt == null)
@@ -373,6 +383,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
     public void ButtonNextRound()
     {
+        // 次へ進むならポップアップは役目を終えるので閉じる
+        HideRoundResultPopup();
+
         var targetPlayer = GetDebugOrLocalPlayer();
         if (targetPlayer == null) return;
 
@@ -760,8 +773,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         ResponsiveCanvasScaler.MyCardRowCountForLayout = 1;
 
+        bool createdCard = false;
         while (myCardParent.transform.childCount < cnt)
         {
+            createdCard = true;
             var card = Instantiate(cardUI, myCardParent.transform);
             int index = myCardParent.transform.childCount - 1;
             card.GetComponent<NumberCardUI>().Setup(index + 1);
@@ -786,7 +801,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         }
 
         // 手札も、親サイズ確定後(LateUpdate)にカードサイズを決める
-        _pendingCardFit.Add((myCardParent.transform, cnt));
+        if (createdCard || !IsCardSized(myCardParent.transform))
+            _pendingCardFit.Add((myCardParent.transform, cnt));
     }
 
 
@@ -828,7 +844,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         var rootVl = othersCardParent.GetComponent<VerticalLayoutGroup>();
         if (rootVl == null) rootVl = othersCardParent.AddComponent<VerticalLayoutGroup>();
         rootVl.childAlignment = TextAnchor.UpperCenter;
-        rootVl.spacing = 8f;
+        rootVl.spacing = 2f;
         rootVl.childControlWidth = true;
         rootVl.childControlHeight = true;
         rootVl.childForceExpandWidth = true;
@@ -852,11 +868,16 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
             while (row.childCount < perRow) CreatePlayerBlock(row);
 
+            // この行に実際に入るプレイヤー数(最終行は端数になることがある)
+            int inThisRow = Mathf.Min(perRow, pcnt - r * perRow);
+
             for (int k = 0; k < row.childCount; k++)
             {
                 int i = r * perRow + k;            // プレイヤー番号
                 var block = row.GetChild(k);
-                block.gameObject.SetActive(k < perRow && i < pcnt);
+                // 使わないブロックは非表示にし、幅の配分から除外する。
+                // (残しておくと空きスペースができて一覧が崩れる)
+                block.gameObject.SetActive(k < inThisRow);
                 if (!block.gameObject.activeSelf) continue;
 
                 // ラベル
@@ -871,8 +892,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
                 // カード行
                 var rowsTf = block.Find("CardRows");
+                bool createdCard = false;
                 while (rowsTf.childCount < cnt)
                 {
+                    createdCard = true;
                     var card = Instantiate(cardUI, rowsTf);
                     card.GetComponent<NumberCardUI>().Setup(rowsTf.childCount);
                     var b = card.GetComponent<UnityEngine.UI.Button>();
@@ -888,7 +911,11 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
                 // カードサイズはブロックの実サイズが確定してから決める。
                 // 生成直後はまだ高さが未確定なので、この場では行わず
                 // レイアウト確定後に実行するよう予約する。
-                _pendingCardFit.Add((rowsTf, cnt));
+                // カードを新しく作ったとき、またはまだサイズが決まっていない
+                // ときだけ予約する。既に決まっていれば再計算しない
+                // (Confirmのたびに計算し直すとサイズがガタつくため)。
+                if (createdCard || !IsCardSized(rowsTf))
+                    _pendingCardFit.Add((rowsTf, cnt));
             }
         }
 
@@ -974,15 +1001,23 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     // 一度計算して終わりにすると古いサイズのまま残ってしまう。
     private Vector2 _lastLayoutSize;
 
+    // 画面サイズが変わったときだけカードサイズを計算し直す。
+    // プレイヤー数やカード枚数はゲーム中に変わらないので、
+    // カードを出すたびに計算し直す必要はない。
+    // (以前は微小なレイアウト変動にも反応して再計算が走り、
+    //  Confirmのたびにカードサイズがガタついていた)
     private void RequeueCardFitIfResized()
     {
-        if (othersCardParent == null) return;
-        var rt = othersCardParent.GetComponent<RectTransform>();
-        var now = new Vector2(rt.rect.width, rt.rect.height);
-        if ((now - _lastLayoutSize).sqrMagnitude < 1f) return;
+        var canvasRt = GetCanvasRect();
+        if (canvasRt == null) return;
+        var now = new Vector2(canvasRt.rect.width, canvasRt.rect.height);
+        if (Mathf.Abs(now.x - _lastLayoutSize.x) < 2f &&
+            Mathf.Abs(now.y - _lastLayoutSize.y) < 2f) return;
         _lastLayoutSize = now;
 
-        // 一覧の各カード行を再登録
+        if (othersCardParent == null) return;
+
+        // 一覧の各カード行
         foreach (Transform row in othersCardParent.transform)
         {
             if (!row.gameObject.activeSelf) continue;
@@ -1012,6 +1047,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         }
     }
 
+
     private void LateUpdate()
     {
         // ラウンド結果ポップアップの更新/自動クローズ
@@ -1029,14 +1065,29 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             if (bandH >= 40f && bandW >= 40f)
             {
                 int n = _pendingPlayedFit;
-                float ch = bandH * 0.62f;          // 残りはラベルと余白
+                float ch = bandH * 0.80f;          // 残りはラベル分(帯の空白を減らす)
                 float cw = ch * (CARD_W / CARD_H);
                 float maxW = (bandW - 24f * (n - 1)) / n;
                 if (cw > maxW) { cw = maxW; ch = cw * (CARD_H / CARD_W); }
 
+                // 確定していなければ予約を残し、次のフレームで再挑戦する
+                if (cw < 8f || ch < 8f) return;
+
                 for (int i = 0; i < n && i < playedCardsParent.transform.childCount; i++)
                 {
-                    var card = playedCardsParent.transform.GetChild(i).Find("Card");
+                    var slot = playedCardsParent.transform.GetChild(i);
+                    // スロット自体の高さも明示する。
+                    // 指定しないとラベル分しか確保されず、カードが潰れる。
+                    var sle = slot.GetComponent<LayoutElement>();
+                    if (sle != null)
+                    {
+                        sle.preferredWidth = cw;
+                        sle.preferredHeight = bandH;
+                        sle.minWidth = cw;
+                        sle.minHeight = ch;
+                    }
+
+                    var card = slot.Find("Card");
                     var le = card != null ? card.GetComponent<LayoutElement>() : null;
                     if (le == null) continue;
                     le.preferredWidth = cw;
@@ -1056,49 +1107,115 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         // 処理されず、カードが極小のまま残ってしまう。
         // (エディタは初期化が速く偶然1フレーム目で確定するが、
         //  WebGLでは間に合わずこの問題が表面化していた)
+        // 一覧のカードは全プレイヤーで同じサイズにする。
+        // 行ごとに計算すると、行の高さのわずかな差や計算タイミングのずれで
+        // サイズがバラバラになる(P0とP4で大きさが違う、という状態になっていた)。
+        var ocRt = othersCardParent != null ? othersCardParent.GetComponent<RectTransform>() : null;
+        if (ocRt != null && ocRt.rect.height > 40f && ocRt.rect.width > 40f)
+        {
+            int rowsOfPlayers = 0;
+            int blocksPerRow = 1;
+            int cardsPerBlock = 0;
+            foreach (Transform row in othersCardParent.transform)
+            {
+                if (!row.gameObject.activeSelf) continue;
+                rowsOfPlayers++;
+                int b = 0;
+                foreach (Transform blk in row)
+                {
+                    if (!blk.gameObject.activeSelf) continue;
+                    b++;
+                    var cr = blk.Find("CardRows");
+                    if (cr != null)
+                    {
+                        int c = 0;
+                        foreach (Transform card in cr) if (card.gameObject.activeSelf) c++;
+                        if (c > cardsPerBlock) cardsPerBlock = c;
+                    }
+                }
+                if (b > blocksPerRow) blocksPerRow = b;
+            }
+
+            if (rowsOfPlayers > 0 && cardsPerBlock > 0)
+            {
+                // 1ブロック(=1プレイヤー)に使える幅と高さを求める
+                float rowSpacing = 2f;   // 行間
+                float colSpacing = 24f;  // 列間
+                float blockW = (ocRt.rect.width - colSpacing * (blocksPerRow - 1)) / blocksPerRow;
+                float blockH = (ocRt.rect.height - rowSpacing * (rowsOfPlayers - 1)) / rowsOfPlayers;
+
+                const float LABEL_H = 20f;
+                float cardAreaH = blockH - LABEL_H - 2f;
+                float cardSpacing = 4f;
+
+                // 高さと幅の両方に収まるサイズを求める(全行共通)
+                float ch = cardAreaH;
+                float cw = ch * (CARD_W / CARD_H);
+                float maxW = (blockW - cardSpacing * (cardsPerBlock - 1)) / cardsPerBlock;
+                if (cw > maxW) { cw = maxW; ch = cw * (CARD_H / CARD_W); }
+
+                if (cw >= 8f && ch >= 8f)
+                {
+                    foreach (Transform row in othersCardParent.transform)
+                    {
+                        if (!row.gameObject.activeSelf) continue;
+                        foreach (Transform blk in row)
+                        {
+                            if (!blk.gameObject.activeSelf) continue;
+                            var cr = blk.Find("CardRows");
+                            if (cr == null) continue;
+                            for (int i = 0; i < cr.childCount; i++)
+                            {
+                                var le = cr.GetChild(i).GetComponent<LayoutElement>();
+                                if (le == null) continue;
+                                le.preferredWidth = cw;
+                                le.preferredHeight = ch;
+                                le.minWidth = cw;
+                                le.minHeight = ch;
+                            }
+                        }
+                    }
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(ocRt);
+                    // 一覧側の予約は済んだので、手札だけ残す
+                    _pendingCardFit.RemoveAll(p => p.row != null && p.row.gameObject != myCardParent);
+                }
+            }
+        }
+
+        // 手札は独立して計算する
         for (int idx = _pendingCardFit.Count - 1; idx >= 0; idx--)
         {
             var (row, count) = _pendingCardFit[idx];
             if (row == null) { _pendingCardFit.RemoveAt(idx); continue; }
             var rowRt = row as RectTransform;
-            if (rowRt == null) { _pendingCardFit.RemoveAt(idx); continue; }
+            if (rowRt == null || row.gameObject != myCardParent) { _pendingCardFit.RemoveAt(idx); continue; }
 
-            // 手札(MyCardParent)は自分自身が並べる枠。
-            // 一覧のCardRowsは親ブロックからラベル分を引いた残りが使える。
-            bool isHand = (row.gameObject == myCardParent);
-            float w, h, spacing;
-            if (isHand)
-            {
-                w = rowRt.rect.width - 20f;
-                h = rowRt.rect.height - 12f;
-                spacing = 8f;
-            }
-            else
-            {
-                var block = row.parent as RectTransform;
-                if (block == null) { _pendingCardFit.RemoveAt(idx); continue; }
-                float labelH = 0f;
-                var label = block.Find("Label") as RectTransform;
-                if (label != null) labelH = label.rect.height;
-                w = block.rect.width;
-                h = block.rect.height - labelH - 8f;
-                spacing = 4f;
-            }
-            // まだ確定していなければ、リストに残して次のフレームで再挑戦する
+            float w = rowRt.rect.width - 20f;
+            float h = rowRt.rect.height - 8f;
             if (h < 20f || w < 20f) continue;
 
-            FitCardsInRow(row, count, spacing, w, h);
-            _pendingCardFit.RemoveAt(idx);
+            if (FitCardsInRow(row, count, 8f, w, h))
+                _pendingCardFit.RemoveAt(idx);
         }
+    }
+
+    // その列のカードが既に適切なサイズを持っているか
+    private static bool IsCardSized(Transform row)
+    {
+        if (row == null || row.childCount == 0) return false;
+        var rt = row.GetChild(0).GetComponent<RectTransform>();
+        return rt != null && rt.rect.width > 1f && rt.rect.height > 1f;
     }
 
     // カード列の高さと幅を「呼び出し側から実数で」受け取り、
     // 各カードのpreferredサイズを決める。
     // rect.heightを内部で測ると、子のサイズ変更が親に跳ね返って
     // 測り直すたびに小さくなる自己参照ループに陥るため。
-    private void FitCardsInRow(Transform row, int count, float spacing, float rowW, float rowH)
+    // 適用できたらtrue。サイズが確定していなければfalseを返し、
+    // 呼び出し側で次のフレームに再挑戦させる。
+    private bool FitCardsInRow(Transform row, int count, float spacing, float rowW, float rowH)
     {
-        if (rowH < 5f || rowW < 5f || count <= 0) return;
+        if (rowH < 5f || rowW < 5f || count <= 0) return false;
 
         float cardH = rowH;
         float cardW = cardH * (CARD_W / CARD_H);
@@ -1108,6 +1225,11 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             cardW = maxW;
             cardH = cardW * (CARD_H / CARD_W);
         }
+
+        // 計算結果が不正(負や極小)なら適用しない。
+        // 親のサイズがまだ確定していない状態で計算すると、
+        // カードが消えたり1px程度に潰れたりする。
+        if (cardW < 8f || cardH < 8f) return false;
 
         for (int i = 0; i < row.childCount; i++)
         {
@@ -1121,9 +1243,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         // LayoutElementの値を変えただけではLayoutGroupは再計算しない。
         // 明示的にリビルドを要求する。
-        // (この時点でカードサイズは計算済みなので、リビルドしても
-        //  値が変わらず、自己参照ループにはならない)
         LayoutRebuilder.ForceRebuildLayoutImmediate(row.GetComponent<RectTransform>());
+        return true;
     }
 
 
@@ -1136,11 +1257,15 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         block.AddComponent<RectTransform>();
         var vl = block.AddComponent<VerticalLayoutGroup>();
         vl.childAlignment = TextAnchor.UpperCenter;
-        vl.spacing = 4f;
+        vl.spacing = 1f;
         vl.childControlWidth = true;
         vl.childControlHeight = true;
         vl.childForceExpandWidth = true;
-        vl.childForceExpandHeight = true;
+        // trueだとpreferredHeightが無視され、ラベルが余った高さを
+        // 吸って肥大する(20指定が38pxになっていた)。
+        // falseにすればラベルは指定どおりの高さに収まり、
+        // 残りはflexibleHeightを持つCardRowsが受け取る。
+        vl.childForceExpandHeight = false;
 
         var labelGo = new GameObject("Label");
         labelGo.transform.SetParent(block.transform, false);
@@ -1153,15 +1278,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         t.alignment = TextAlignmentOptions.Center;
         t.raycastTarget = false;
         var labelLe = labelGo.AddComponent<LayoutElement>();
-        // ラベルは控えめに、カード行に高さを多く回す。
-        // flexibleHeightだけだと配分が不安定になるため、
-        // preferredHeightで目安を与えたうえで比率を小さくする。
-        // ラベルは最小限に留め、高さの大半をカード行に回す。
-        // カードはAspectRatioFitterで高さから幅が決まるため、
-        // 高さが足りないと横に余白が余ったまま小さく表示されてしまう。
+        // ラベルは最小限に抑え、高さの大半をカード行に回す。
+        // 6人x15枚では1行あたり約100pxしかなく、
+        // ラベルが37pxも取るとカードが潰れてしまう。
         labelLe.flexibleHeight = 0f;
-        labelLe.preferredHeight = 26f;
-        labelLe.minHeight = 14f;
+        labelLe.preferredHeight = 20f;
+        labelLe.minHeight = 0f;
 
         // カードを横一列に並べる。高さは親が決め、幅はAspectRatioFitterが決める。
         var rows = new GameObject("CardRows");
@@ -1178,7 +1300,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         rowHl.childForceExpandHeight = false;
         var rowsLe = rows.AddComponent<LayoutElement>();
         rowsLe.flexibleHeight = 1f;   // 残りの高さをすべて受け取る
-        rowsLe.minHeight = 30f;
+        // minHeightは設けない。下限があると、行数が多いときに
+        // 合計が枠を超えて配分が崩れる。
     }
 
 
@@ -1337,8 +1460,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             if (!ch.name.StartsWith("PlayedSlot")) DestroyImmediate(ch.gameObject);
         }
 
+        bool createdSlot = false;
         while (playedCardsParent.transform.childCount < pcnt)
+        {
             CreatePlayedSlot(playedCardsParent.transform);
+            createdSlot = true;
+        }
 
         int myId = NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1;
 
@@ -1377,8 +1504,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             else { num.SetupDisplay("-"); num.SetSelected(false); }
         }
 
-        // カードサイズは帯の実サイズ確定後(LateUpdate)に決める
-        _pendingPlayedFit = pcnt;
+        // 作ったとき、またはまだサイズが決まっていないときだけ予約する
+        bool playedSized = playedCardsParent.transform.childCount > 0
+            && playedCardsParent.transform.GetChild(0).Find("Card") != null
+            && playedCardsParent.transform.GetChild(0).Find("Card")
+                .GetComponent<RectTransform>().rect.width > 1f;
+        if (createdSlot || !playedSized) _pendingPlayedFit = pcnt;
     }
 
     // 「今出したカード」1人分(カード + 名前)のブロック
@@ -1388,8 +1519,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         slot.transform.SetParent(parent, false);
         slot.AddComponent<RectTransform>();
         var vl = slot.AddComponent<VerticalLayoutGroup>();
+        // 帯の高さいっぱいを使うので中央寄せでよい
         vl.childAlignment = TextAnchor.MiddleCenter;
-        vl.spacing = 6f;
+        vl.spacing = 2f;
         vl.childControlWidth = true;
         vl.childControlHeight = true;
         vl.childForceExpandWidth = false;
@@ -1413,7 +1545,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         t.alignment = TextAlignmentOptions.Center;
         t.raycastTarget = false;
         var le = go.AddComponent<LayoutElement>();
-        le.flexibleHeight = 0.3f;   // カードとラベルで高さを分け合う
+        le.flexibleHeight = 0f;
+        le.preferredHeight = 26f;   // ラベルは控えめにしてカードを大きく
     }
 
 
@@ -1453,6 +1586,30 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         return canvas != null ? canvas.transform.Find("HistoryPanel") : null;
     }
 
+    // GameManagerのログから履歴パネルを丸ごと作り直す。
+    private void RebuildHistoryFromLog()
+    {
+        var localPlayer = GetDebugOrLocalPlayer();
+        var gm = localPlayer != null ? localPlayer.gameManager : null;
+        if (gm == null) return;
+
+        ClearHistoryPanel();
+        for (int i = 0; i < gm.roundHistoryLog.Count; i++)
+        {
+            // ログ形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel"
+            var parts = gm.roundHistoryLog[i].Split('|');
+            if (parts.Length < 5) continue;
+            int.TryParse(parts[0], out int roundNumber);
+            var cards = new List<int>();
+            if (!string.IsNullOrEmpty(parts[1]))
+                foreach (var s in parts[1].Split(','))
+                    if (int.TryParse(s, out int v)) cards.Add(v);
+            int.TryParse(parts[2], out int winnerId);
+            bool tie = parts[3] == "1";
+            AppendHistoryLine(roundNumber, cards, winnerId, tie, parts[4]);
+        }
+    }
+
     public void ButtonToggleHistory()
     {
         var panel = FindHistoryPanel();
@@ -1461,6 +1618,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         if (willShow)
         {
+            // 開くたびに履歴を作り直す。
+            // Callbackを取りこぼしていた場合でも、ここで最新状態になる。
+            RebuildHistoryFromLog();
             // モーダルなので、開くたびに画面サイズに合わせて作り直す。
             // 500x400固定だと、縦持ちの画面に対して小さすぎた。
             var prt = panel.GetComponent<RectTransform>();
@@ -1688,8 +1848,18 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     public void ButtonLeaveRoom()
     {
         var localPlayer = NetworkClient.connection?.identity?.GetComponent<Player>();
-        if (localPlayer == null || localPlayer.room == null) return;
-        roomManager.CmdLeaveRoom(localPlayer.room.roomId, connectionToClient);
+        if (localPlayer == null) return;
+
+        // roomはサーバー専用の参照でクライアントではnullなので、
+        // TargetRpcで本人にだけ渡されたmyRoomIdを使う。
+        // (以前はroom==nullで即returnしており、WebGLで動作しなかった)
+        string rid = !string.IsNullOrEmpty(localPlayer.myRoomId)
+            ? localPlayer.myRoomId
+            : (localPlayer.room != null ? localPlayer.room.roomId : null);
+        if (string.IsNullOrEmpty(rid)) return;
+
+        HideRoundResultPopup();
+        roomManager.CmdLeaveRoom(rid, connectionToClient);
     }
 
     public Player GetDebugOrLocalPlayer()
@@ -1739,7 +1909,15 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         }
 
         _resultPopup.SetActive(true);
+        // 描画順をNext/Confirmボタンの直前にする。
+        // 最前面に出すとボタンを覆ってしまうため。
+        // ポップアップは最前面に出すが、そのあとで
+        // Next/Confirmボタンをさらに前へ持ち上げる。
+        // これで「ポップアップはボタンより下のレイヤー」になり、
+        // 画面を覆いつつボタンは押せる状態が保たれる。
         _resultPopup.transform.SetAsLastSibling();
+        RaiseActionButtonsAboveOverlay();
+
         _pendingResultPopupFit = n;
     }
 
@@ -1752,20 +1930,28 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         _resultPopup = new GameObject("RoundResultPopup");
         _resultPopup.transform.SetParent(canvasTf, false);
+        // 画面の上寄りに出す。下部(確定/次へボタンと手札)は覆わない。
+        // 全画面にするとNextが押せなくなるため。
         var rt = _resultPopup.AddComponent<RectTransform>();
+        // 画面全体を覆う。
+        // ただし描画順(レイヤー)はNextボタンより下にするので、
+        // ボタンはポップアップの上に表示され、押せる状態が保たれる。
         rt.anchorMin = Vector2.zero;
         rt.anchorMax = Vector2.one;
         rt.offsetMin = Vector2.zero;
         rt.offsetMax = Vector2.zero;
         var dim = _resultPopup.AddComponent<UnityEngine.UI.Image>();
-        dim.color = new Color(0f, 0f, 0f, 0.72f);   // 背景を暗くして結果を目立たせる
+        dim.color = new Color(0.05f, 0.07f, 0.10f, 0.96f);
+        dim.raycastTarget = false;   // 下のボタン操作を妨げない
 
         // 中身(タイトル + カード列)を縦に並べる
         var body = new GameObject("Body");
         body.transform.SetParent(_resultPopup.transform, false);
         var brt = body.AddComponent<RectTransform>();
-        brt.anchorMin = new Vector2(0.05f, 0.25f);
-        brt.anchorMax = new Vector2(0.95f, 0.75f);
+        // 内容を上寄りに配置する。
+        // 下いっぱいまで使うとNextボタンと近くなりすぎるため。
+        brt.anchorMin = new Vector2(0.04f, 0.30f);
+        brt.anchorMax = new Vector2(0.96f, 0.96f);
         brt.offsetMin = Vector2.zero;
         brt.offsetMax = Vector2.zero;
         var bvl = body.AddComponent<VerticalLayoutGroup>();
@@ -1787,8 +1973,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         t.alignment = TextAlignmentOptions.Center;
         t.raycastTarget = false;
         var tle = titleGo.AddComponent<LayoutElement>();
-        tle.flexibleHeight = 0.3f;
-        tle.minHeight = 40f;
+        tle.flexibleHeight = 0f;      // カード側に高さを譲る
+        tle.preferredHeight = 60f;
+        tle.minHeight = 36f;
 
         var cards = new GameObject("Cards");
         cards.transform.SetParent(body.transform, false);
@@ -1812,8 +1999,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         slot.transform.SetParent(parent, false);
         slot.AddComponent<RectTransform>();
         var vl = slot.AddComponent<VerticalLayoutGroup>();
-        vl.childAlignment = TextAnchor.MiddleCenter;
-        vl.spacing = 8f;
+        // 上寄せにしてカードと名前を密着させる。
+        // 中央寄せだと、余った高さが両者の間に分配されて離れてしまう。
+        vl.childAlignment = TextAnchor.UpperCenter;
+        vl.spacing = 2f;
         vl.childControlWidth = true;
         vl.childControlHeight = true;
         vl.childForceExpandWidth = false;
@@ -1837,7 +2026,37 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         t.alignment = TextAlignmentOptions.Center;
         t.raycastTarget = false;
         var le = go.AddComponent<LayoutElement>();
-        le.flexibleHeight = 0.28f;
+        // ラベルは固定高さにする。
+        // flexibleHeightにすると余った高さを吸ってしまい、
+        // カードとの間が大きく空いてしまう。
+        le.flexibleHeight = 0f;
+        le.preferredHeight = 36f;
+        le.minHeight = 20f;
+    }
+
+    // 確定/次へボタンを、オーバーレイより前面に表示する。
+    // ボタンはGameBoardの子(レイアウトに参加)なので親は変えず、
+    // Canvasコンポーネントで描画順だけを上書きする。
+    private void RaiseActionButtonsAboveOverlay()
+    {
+        var boardTf = othersCardParent != null ? othersCardParent.transform.parent : null;
+        var slot = boardTf != null ? boardTf.Find("ActionButtonSlot") : null;
+        if (slot == null) return;
+
+        var cv = slot.GetComponent<Canvas>();
+        if (cv == null)
+        {
+            cv = slot.gameObject.AddComponent<Canvas>();
+            slot.gameObject.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+        }
+        cv.overrideSorting = true;
+        cv.sortingOrder = 10;   // オーバーレイ(0)より前
+    }
+
+    public void HideRoundResultPopup()
+    {
+        if (_resultPopup != null && _resultPopup.activeSelf)
+            _resultPopup.SetActive(false);
     }
 
     private void UpdateResultPopup()
@@ -1849,7 +2068,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             if (cardsRt != null && cardsRt.rect.height > 40f && cardsRt.rect.width > 40f)
             {
                 int n = _pendingResultPopupFit;
-                float ch = cardsRt.rect.height * 0.7f;
+                // 結果は主役なので高さをほぼ使い切る
+                float ch = cardsRt.rect.height * 0.92f;
                 float cw = ch * (CARD_W / CARD_H);
                 float maxW = (cardsRt.rect.width - 28f * (n - 1)) / n;
                 if (cw > maxW) { cw = maxW; ch = cw * (CARD_H / CARD_W); }
