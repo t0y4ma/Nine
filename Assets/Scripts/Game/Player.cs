@@ -12,6 +12,54 @@ public class Player : NetworkBehaviour
     // 読めてしまうため、TargetRpcで所有者だけに送る。
     [HideInInspector] public string myRoomId = "";
 
+    // 退出した本人をロビー(部屋選択画面)に戻す。
+    // ゲーム中に抜けた場合、集計のためオブジェクト自体は
+    // 部屋に残るので、UIだけを切り替える必要がある。
+    // 時間切れ時の自動提出で使う「選択中のカード」。
+    // 確定はしていないが選んではいる状態をサーバーに伝えておき、
+    // タイムアウト時にランダムではなくこのカードを出す。
+    [HideInInspector] public int pendingSelection = -1;
+
+    [Command]
+    public void CmdSetPendingSelection(int cardIndex)
+    {
+        pendingSelection = cardIndex;
+    }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+    [Server]
+    public void DebugSetPendingSelection(int cardIndex)
+    {
+        pendingSelection = cardIndex;
+    }
+#endif
+
+    // 確定したカードを取り消す。
+    // ラウンドが解決する前なら選び直せる。
+    [Command]
+    public void CmdCancelCard()
+    {
+        if (gameManager == null) return;
+        gameManager.CancelCard(playerId);
+    }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+    [Server]
+    public void DebugCancelCard()
+    {
+        if (gameManager == null) return;
+        gameManager.CancelCard(playerId);
+    }
+#endif
+
+    [TargetRpc]
+    public void TargetLeftRoom(NetworkConnection target)
+    {
+        myRoomId = "";
+        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        uiManager?.ShowRoomSelectAfterLeave();
+    }
+
     [TargetRpc]
     public void TargetSetRoomId(NetworkConnection target, string roomId)
     {

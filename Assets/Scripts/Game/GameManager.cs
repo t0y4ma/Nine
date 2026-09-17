@@ -108,7 +108,11 @@ public class GameManager : NetworkBehaviour
             }
             int winnerId = -1; int.TryParse(parts[2], out winnerId);
             bool tie = parts[3] == "1";
-            uiManager.AppendHistoryLine(roundNumber, cards, winnerId, tie, parts[4]);
+            // パネルが開いたまま行が増えると、追加分だけ
+            // 幅の計算基準が違ってサイズが揃わない。
+            // 開いている場合は全体を作り直す。
+            if (uiManager.IsHistoryPanelOpen()) uiManager.RebuildHistoryPanel();
+            else uiManager.AppendHistoryLine(roundNumber, cards, winnerId, tie, parts[4]);
         }
         else if (op == SyncList<string>.Operation.OP_CLEAR)
         {
@@ -177,11 +181,34 @@ public class GameManager : NetworkBehaviour
         {
             playerCom.isReadytoTurn = false;
             playerCom.isReadyToStart = false;
+            playerCom.pendingSelection = -1;
             for (int i = 0; i < playerCom.used.Count; i++) playerCom.used[i] = false;
         }
 
         RpcRefreshBoard();
         StartRound();
+    }
+
+    // 確定を取り消す。ラウンド解決前のみ有効。
+    [Server]
+    public void CancelCard(int id)
+    {
+        if (!inProgress) return;
+        if (id < 0 || id >= turncards.Count) return;
+        if (turncards[id] == 0) return;   // まだ出していない
+
+        int cardindex = turncards[id] - 1;
+        turncards[id] = 0;
+
+        var pl = (room != null && id < room.playerComponents.Count) ? room.playerComponents[id] : null;
+        if (pl != null)
+        {
+            pl.isReadytoTurn = false;
+            if (cardindex >= 0 && cardindex < pl.used.Count) pl.used[cardindex] = false;
+        }
+
+        RpcRefreshMyHand();
+        RpcRefreshBoard();
     }
 
     [Server]
@@ -191,11 +218,14 @@ public class GameManager : NetworkBehaviour
         if (used_Players[id * CARDCOUNT + cardindex]) return false;
         if (turncards[id] != 0) return false;
 
-        used_Players[id * CARDCOUNT + cardindex] = true;
+        // used_PlayersはSyncListで全員に見えるため、ここでは更新しない。
+        // 更新するとラウンド終了前に「誰が何を出したか」が
+        // 一覧から読み取れてしまう。公開はResolveRoundで行う。
         turncards[id] = cardindex + 1;
 
         var actingPlayer = room.playerComponents[id];
-        actingPlayer.isReadytoTurn = true; // "確定済み"のシグナルのみ公開(値は非公開)。ラウンド終了はタイマーが判断する
+        actingPlayer.isReadytoTurn = true;
+        actingPlayer.pendingSelection = -1;   // 確定したので選択状態は不要 // "確定済み"のシグナルのみ公開(値は非公開)。ラウンド終了はタイマーが判断する
 
         // 手札(自分のみ)と、盤面全体(誰が提出済みかの「?」表示)を更新する。
         // 以前はRpcRefreshMyHandだけだったため、他プレイヤーの提出が
@@ -353,10 +383,28 @@ public class GameManager : NetworkBehaviour
                 && room.playerComponents[i] != null && room.playerComponents[i].hasLeft)
                 continue;
 
+            // 確定はしていないが選択中のカードがあれば、それを出す。
+            // (ランダムより本人の意図に近い)
+            var selPl = (room != null && i < room.playerComponents.Count) ? room.playerComponents[i] : null;
+            if (selPl != null && selPl.pendingSelection >= 0
+                && selPl.pendingSelection < selPl.used.Count
+                && !selPl.used[selPl.pendingSelection])
+            {
+                playedCards[i] = selPl.pendingSelection + 1;
+                selPl.used[selPl.pendingSelection] = true;
+                continue;
+            }
+
             var candidates = new List<int>();
             for (int c = 0; c < CARDCOUNT; c++)
             {
-                if (!used_Players[i * CARDCOUNT + c]) candidates.Add(c);
+                // used_Playersは公開時にしか更新しないので、
+                // 自分の手札(Player.used)を基準に未使用カードを選ぶ
+                bool alreadyUsed = (room != null && i < room.playerComponents.Count
+                    && c < room.playerComponents[i].used.Count)
+                    ? room.playerComponents[i].used[c]
+                    : used_Players[i * CARDCOUNT + c];
+                if (!alreadyUsed) candidates.Add(c);
             }
             if (candidates.Count == 0) continue; // 全カード使用済み(基本起こらないはず)
 
@@ -382,15 +430,28 @@ public class GameManager : NetworkBehaviour
         {
             if (playedCards[i] > 0 && playedCards[i] == best) winners.Add(i);
             // このラウンドで選んだ値を公開する(全員が選び終わったこのタイミングで初めて公開)
-            if (playedCards[i] > 0) lastRevealedPicks[i] = playedCards[i];
+            if (playedCards[i] > 0)
+            {
+                lastRevealedPicks[i] = playedCards[i];
+                // 使用済み一覧もここで初めて更新する
+                int ci = playedCards[i] - 1;
+                if (ci >= 0 && ci < CARDCOUNT) used_Players[i * CARDCOUNT + ci] = true;
+            }
         }
 
-        // tieは「複数人が最大値で並んだか」を表す(得点は発生する)
+        // 提出した人数を数える(抜けた人や未提出は除く)
+        int submittedCount = 0;
+        for (int i = 0; i < playedCards.Count; i++) if (playedCards[i] > 0) submittedCount++;
+
+        // 全員が同じカードを出した場合は引き分け。誰も得点しない。
+        // (全員勝者にすると、単に全員に点が入るだけで勝負にならない)
+        bool allSame = submittedCount > 1 && winners.Count == submittedCount;
+
         bool tie = winners.Count > 1;
         int winnerId = winners.Count > 0 ? winners[0] : -1;
 
         int pointsGainedThisRound = 0;
-        if (winners.Count > 0)
+        if (winners.Count > 0 && !allSame)
         {
             int pointsToAdd = 1;
             if (ScoringMode == 1)
@@ -410,45 +471,39 @@ public class GameManager : NetworkBehaviour
 
         // 履歴ログの1行を、クライアント側でリッチUIに変換できるよう構造化した形式で記録する。
         // 形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel"
-        string resultLabel;
-        if (winners.Count == 0) resultLabel = "";
-        else
-        {
-            // 同点なら勝者を連名で出す(全員が得点しているため)
-            var names = new List<string>();
-            foreach (var w in winners)
-            {
-                string n = (w < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[w].playerName))
-                    ? room.playerComponents[w].playerName : ("P" + w);
-                names.Add(n);
-            }
-            resultLabel = string.Join(" & ", names) + " +" + pointsGainedThisRound + "pt";
-        }
+        // 誰が勝ったかはカード側の強調表示で分かるので、
+        // ここでは変動ptだけを出す。
+        // 連名にすると人数が増えたとき文字が入りきらなくなる。
+        string resultLabel = (winners.Count == 0 || allSame)
+            ? (allSame ? "Tie" : "")
+            : ("+" + pointsGainedThisRound + "pt");
 
         var cardsCsv = string.Join(",", playedCards);
         roundHistoryLog.Add(roundsPlayed + "|" + cardsCsv + "|" + winnerId + "|" + (tie ? "1" : "0") + "|" + resultLabel);
 
-        RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie, lastRevealedPicks.ToArray());
+        RpcRoundResult(roundsPlayed, CARDCOUNT, winnerId, tie, lastRevealedPicks.ToArray(), allSame);
         // 公開値を明示的に渡すことで、遷移が始まった直後から表示されるようにする
         RpcRevealBoard(lastRevealedPicks.ToArray(), roundWins.ToArray());
     }
 
     [ClientRpc]
-    private void RpcRoundResult(int roundNumber, int totalRounds, int winnerId, bool tie, int[] picks)
+    private void RpcRoundResult(int roundNumber, int totalRounds, int winnerId, bool tie, int[] picks, bool allSameRound)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         if (uiManager == null) return;
 
         // 同点でも得点は入るので「引き分け」ではなく
         // 「複数人が勝った」という表現にする
-        string message = tie
-            ? ("Round " + roundNumber + "/" + totalRounds + ": multiple winners")
-            : ("Round " + roundNumber + "/" + totalRounds + ": Player " + winnerId + " wins the round");
+        string message;
+        if (allSameRound) message = "Round " + roundNumber + "/" + totalRounds + ": tie";
+        else if (tie) message = "Round " + roundNumber + "/" + totalRounds + ": multiple winners";
+        else message = "Round " + roundNumber + "/" + totalRounds + ": Player " + winnerId + " wins the round";
         uiManager.ShowResult(message);
         // 結果を画面中央に大きく表示する(遷移時間のあいだだけ)
         // picksはRpcの引数で受け取る。
         // SyncListを参照すると、同期が間に合わず空のまま表示されることがある。
-        uiManager.ShowRoundResultPopup(picks, winnerId, tie, message,
+        // 全員同じなら勝者なしとして渡す(強調表示もされない)
+        uiManager.ShowRoundResultPopup(picks, allSameRound ? -1 : winnerId, tie, message,
             4f);   // 表示時間は4秒
     }
 

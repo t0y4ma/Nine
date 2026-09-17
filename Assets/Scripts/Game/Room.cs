@@ -56,6 +56,8 @@ public class Room
             player.identity.GetComponent<NetworkMatch>().matchId = Guid.Empty;
             players.Remove(player);           // 接続だけ外す(集計用のリストは維持)
             gameManager.RefreshLobbyStatus();
+            // 抜けた本人をタイトル(接続画面)に戻す
+            playerCom.TargetLeftRoom(player);
             return;
         }
 

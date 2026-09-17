@@ -244,18 +244,25 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // 上部要素は画面高の割合で配置し、合計が20%に収まるようにする。
         // 固定値だと解像度によって過剰/不足が生じ、
         // 盤面(GameBoard)に回せる高さが変わってしまう。
-        float topH = canvasHeight * 0.20f;
-        float btnH = topH * 0.36f;
+        float topH = canvasHeight * (IsPortraitMode ? 0.20f : 0.16f);
+        float btnH = topH * (IsPortraitMode ? 0.26f : 0.36f);
+        // 幅は画面幅を基準にする。
+        // 高さから比率(x2.6)で出すと、縦持ちでは画面幅に対して
+        // 大きくなりすぎ、左右のボタンが中央で重なっていた。
+        float btnW = canvasWidth * (IsPortraitMode ? 0.26f : 0.16f);
+        float sideGap = canvasWidth * 0.02f;
         SetAnchoredRect(canvasTf, "BtnLeaveRoom", new Vector2(0f, 1f),
-            new Vector2(40f, -topH * 0.06f), new Vector2(btnH * 2.6f, btnH));
+            new Vector2(sideGap, -topH * 0.06f), new Vector2(btnW, btnH));
         SetAnchoredRect(canvasTf, "BtnHistory", new Vector2(1f, 1f),
-            new Vector2(-40f, -topH * 0.06f), new Vector2(btnH * 2.6f, btnH));
+            new Vector2(-sideGap, -topH * 0.06f), new Vector2(btnW, btnH));
 
-        float barH = Mathf.Max(10f, topH * 0.07f);
-        StretchHorizontal(canvasTf, "RoundTimerBarPanel", 60f, -(topH * 0.46f), barH);
-        StretchHorizontal(canvasTf, "TransitionBarPanel", 60f, -(topH * 0.46f + barH + 4f), barH);
+        // バーとStatusTextの左右余白も画面幅基準にする
+        float barH = topH * 0.07f;
+        float barMargin = canvasWidth * 0.04f;
+        StretchHorizontal(canvasTf, "RoundTimerBarPanel", barMargin, -(topH * 0.46f), barH);
+        StretchHorizontal(canvasTf, "TransitionBarPanel", barMargin, -(topH * 0.46f + barH + 4f), barH);
 
-        StretchHorizontal(canvasTf, "StatusText", 40f, -(topH * 0.62f), topH * 0.30f);
+        StretchHorizontal(canvasTf, "StatusText", canvasWidth * 0.03f, -(topH * 0.62f), topH * 0.30f);
         var statusBg = canvasTf.Find("StatusText/Bg")?.GetComponent<RectTransform>();
         if (statusBg != null)
         {
@@ -287,7 +294,9 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // 上部はボタン/タイマーバー/StatusTextが占める。
         // 固定220pxにしていたため、画面が大きいと過剰に、
         // 小さいと不足していた。画面高の割合で確保する。
-        float topReserved = canvasHeight * 0.20f;
+        // 横持ちは画面が低いので、上部の占有を抑えて盤面に回す。
+        // 縦持ちは縦に余裕があるため、上部を広めに取って見やすくする。
+        float topReserved = canvasHeight * (IsPortraitMode ? 0.20f : 0.16f);
         boardRt.offsetMin = new Vector2(sideMargin, canvasHeight * 0.01f);
         boardRt.offsetMax = new Vector2(-sideMargin, -topReserved);
 
@@ -317,13 +326,17 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             ? boardRt.rect.height
             : (canvasHeight / sfBoard) - 240f;
         float usableH2 = Mathf.Max(200f, boardH - 80f - 12f);
-        SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", usableH2 * 0.62f, 0f);
-        SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", usableH2 * 0.23f, 0f);
+        bool portraitNow = IsPortraitMode;
+        float rO = portraitNow ? 0.66f : 0.52f;
+        float rP = portraitNow ? 0.20f : 0.28f;
+        float rH = portraitNow ? 0.14f : 0.20f;
+        SetBoardSlotAbs(canvasTf, boardRt, "OthersCardParent", usableH2 * rO, 0f);
+        SetBoardSlotAbs(canvasTf, boardRt, "PlayedCardsParent", usableH2 * rP, 0f);
         // 確定/次へボタンの席を、手札の前にあらかじめ確保しておく。
         // ボタンを後から重ねる形にすると、表示/非表示のたびに
         // 手札の位置がずれたり重なったりするため。
         EnsureActionButtonSlot(canvasTf, boardRt);
-        SetBoardSlotAbs(canvasTf, boardRt, "MyCardParent", usableH2 * 0.15f, 0f);
+        SetBoardSlotAbs(canvasTf, boardRt, "MyCardParent", usableH2 * rH, 0f);
 
         // 「今出したカード」の帯はUIEventsManager側で設定する。
         // (このメソッドはPlayedCardsParentが生成される前に走ることがあり、
@@ -562,14 +575,18 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // 比率の合計を1.0のままボタンを足していたため、
         // 合計が枠を超えて全体が圧縮されていた。
         const float BUTTON_H = 80f;
-        float usableH = Mathf.Max(200f, boardH - BUTTON_H - 36f);
-        // 一覧は人数分を積むので厚めに。
-        // 「今出したカード」と手札は1行ぶんあれば足りる。
-        // 「今出したカード」と手札は1行だけだが、
-        // そのぶん1枚を大きく見せたいので最低高さを確保する。
-        SetBoardSlotAbs(transform, board, "OthersCardParent", usableH * 0.46f, 120f);
-        SetBoardSlotAbs(transform, board, "PlayedCardsParent", usableH * 0.28f, 150f);
-        SetBoardSlotAbs(transform, board, "MyCardParent", usableH * 0.26f, 140f);
+        float usableH = Mathf.Max(200f, boardH - BUTTON_H - 12f);
+        // 縦持ちと横持ちで配分を変える。
+        //   縦持ち: 一覧が1列(人数分の行)になるため厚く取る
+        //   横持ち: 一覧が2列に収まり行数が半分なので、帯と手札に回せる
+        // minHeightは指定しない(下限が効くと比率が崩れるため)。
+        bool isPortrait = IsPortraitMode;
+        float rOthers = isPortrait ? 0.66f : 0.52f;
+        float rPlayed = isPortrait ? 0.20f : 0.28f;
+        float rHand   = isPortrait ? 0.14f : 0.20f;
+        SetBoardSlotAbs(transform, board, "OthersCardParent", usableH * rOthers, 0f);
+        SetBoardSlotAbs(transform, board, "PlayedCardsParent", usableH * rPlayed, 0f);
+        SetBoardSlotAbs(transform, board, "MyCardParent", usableH * rHand, 0f);
 
         // 並び順: 一覧 → 今出したカード → ボタン → 手札
         var oc = board.Find("OthersCardParent");
