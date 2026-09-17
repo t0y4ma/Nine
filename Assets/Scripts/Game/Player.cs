@@ -10,7 +10,7 @@ public class Player : NetworkBehaviour
     // 自分がどの部屋にいるかを、本人にだけ伝える。
     // SyncVarにすると全クライアントに配信され、他人の部屋IDまで
     // 読めてしまうため、TargetRpcで所有者だけに送る。
-    [HideInInspector] public string myRoomId = "";
+    /*[HideInInspector]*/ public string myRoomId = "";
 
     // 退出した本人をロビー(部屋選択画面)に戻す。
     // ゲーム中に抜けた場合、集計のためオブジェクト自体は

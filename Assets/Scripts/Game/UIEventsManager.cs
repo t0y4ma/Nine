@@ -2095,16 +2095,24 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             bvl.childControlWidth = true; bvl.childControlHeight = true;
             bvl.childForceExpandWidth = true; bvl.childForceExpandHeight = true;
 
+            var msgContainer = new GameObject("MessageContainer");
+            msgContainer.transform.SetParent(body.transform, false);
+            var msgLE = msgContainer.AddComponent<LayoutElement>();
+            msgLE.flexibleHeight = 85f;
+
             var msgGo = new GameObject("Message");
-            msgGo.transform.SetParent(body.transform, false);
-            msgGo.AddComponent<RectTransform>();
+            msgGo.transform.SetParent(msgContainer.transform, false);
+            var msgRt = msgGo.AddComponent<RectTransform>();
+            msgRt.anchorMin = Vector2.zero;
+            msgRt.anchorMax = Vector2.one;
+            msgRt.offsetMin = Vector2.zero;
+            msgRt.offsetMax = Vector2.zero;
             var t = msgGo.AddComponent<TextMeshProUGUI>();
-            t.text = "Leave this game?\nYou cannot rejoin this round.";
+            t.text = "Leave this game? \n You can't rejoin this game.";
             t.enableAutoSizing = true;
             t.fontSizeMin = 1; t.fontSizeMax = 300;
             t.alignment = TextAlignmentOptions.Center;
             t.raycastTarget = false;
-            msgGo.AddComponent<LayoutElement>().flexibleHeight = 0.6f;
 
             // ボタン2つを横に並べる
             var row = new GameObject("Buttons");
@@ -2115,12 +2123,17 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             hl.spacing = 24f;
             hl.childControlWidth = true; hl.childControlHeight = true;
             hl.childForceExpandWidth = true; hl.childForceExpandHeight = true;
-            row.AddComponent<LayoutElement>().flexibleHeight = 0.4f;
+            var rowLE = row.AddComponent<LayoutElement>();
+            rowLE.flexibleHeight = 15f;
+            rowLE.preferredHeight = -1;
 
             CreateConfirmButton(row.transform, "Leave", new Color(0.78f, 0.35f, 0.35f, 1f),
                 () => { _leaveConfirm.SetActive(false); DoLeaveRoom(); });
             CreateConfirmButton(row.transform, "Stay", new Color(0.45f, 0.5f, 0.58f, 1f),
                 () => { _leaveConfirm.SetActive(false); });
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(body.GetComponent<RectTransform>());
+            t.ForceMeshUpdate();
         }
 
         _leaveConfirm.SetActive(true);
@@ -2179,13 +2192,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         var localPlayer = NetworkClient.connection?.identity?.GetComponent<Player>();
         if (localPlayer == null) return;
 
-        // roomはサーバー専用の参照でクライアントではnullなので、
-        // TargetRpcで本人にだけ渡されたmyRoomIdを使う。
-        // (以前はroom==nullで即returnしており、WebGLで動作しなかった)
-        string rid = !string.IsNullOrEmpty(localPlayer.myRoomId)
-            ? localPlayer.myRoomId
-            : (localPlayer.room != null ? localPlayer.room.roomId : null);
-        if (string.IsNullOrEmpty(rid)) return;
+        string rid = localPlayer.myRoomId;
+        Debug.Log("DoLeaveRoom: " + rid);
+        if(rid == null) return; // rid == ""の可能性もあるため、NullorEmptyはダメ
 
         HideRoundResultPopup();
         // senderは[Command]がMirror側で自動補完する。
