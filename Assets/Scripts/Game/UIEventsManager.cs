@@ -1365,9 +1365,11 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
                 // 確定していなければ予約を残し、次のフレームで再挑戦する
                 if (cw < 8f || ch < 8f) return;
 
-                for (int i = 0; i < n && i < playedCardsParent.transform.childCount; i++)
+                // 表示中の要素だけに適用する(先頭の得点カード表示が非表示のこともあるため、番号では数えない)
+                for (int i = 0; i < playedCardsParent.transform.childCount; i++)
                 {
                     var slot = playedCardsParent.transform.GetChild(i);
+                    if (!slot.gameObject.activeSelf) continue;
                     // スロット自体の高さも明示する。
                     // 指定しないとラベル分しか確保されず、カードが潰れる。
                     var sle = slot.GetComponent<LayoutElement>();
@@ -1820,29 +1822,42 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     // 各プレイヤー行の右端に「今出したカード」を表示する
     // 「今出したカード」の内容を更新する。
     // サイズと配置はLayoutGroup + AspectRatioFitterに任せる。
+    // 「今出したカード」の帯。先頭(左端)には得点カードモード用の表示が入ることがある。
+    // 左から: 今回の得点カード、持ち越している得点カード(1枚ずつ)、各プレイヤーのスロット。
+    private const string POINT_CARD_VIEW = "PointCard";
+    private static bool IsPointCardView(Transform t) => t.name.StartsWith(POINT_CARD_VIEW);
+
+    private static bool IsPlayerSlot(Transform t) => t.name.StartsWith("PlayedSlot");
+
     private void RefreshPlayedCards(int pcnt, GameManager gm)
     {
         if (playedCardsParent == null) return;
         playedCardsParent.SetActive(othersCardParent.activeSelf);
 
-        for (int i = playedCardsParent.transform.childCount - 1; i >= 0; i--)
+        var parentTf = playedCardsParent.transform;
+        for (int i = parentTf.childCount - 1; i >= 0; i--)
         {
-            var ch = playedCardsParent.transform.GetChild(i);
-            if (!ch.name.StartsWith("PlayedSlot")) DestroyImmediate(ch.gameObject);
+            var ch = parentTf.GetChild(i);
+            if (!IsPlayerSlot(ch) && !IsPointCardView(ch)) DestroyImmediate(ch.gameObject);
         }
 
+        // プレイヤー分のスロット(得点カード表示は数えない)
+        var slots = new List<Transform>();
+        foreach (Transform ch in parentTf) if (IsPlayerSlot(ch)) slots.Add(ch);
+
         bool createdSlot = false;
-        while (playedCardsParent.transform.childCount < pcnt)
+        while (slots.Count < pcnt)
         {
-            CreatePlayedSlot(playedCardsParent.transform);
+            CreatePlayedSlot(parentTf);
+            slots.Add(parentTf.GetChild(parentTf.childCount - 1));
             createdSlot = true;
         }
 
         int myId = NetworkClient.connection?.identity?.GetComponent<Player>()?.playerId ?? -1;
 
-        for (int i = 0; i < playedCardsParent.transform.childCount; i++)
+        for (int i = 0; i < slots.Count; i++)
         {
-            var slot = playedCardsParent.transform.GetChild(i);
+            var slot = slots[i];
             slot.gameObject.SetActive(i < pcnt);
             if (i >= pcnt) continue;
 
@@ -1875,12 +1890,92 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             else { num.SetupDisplay("-"); num.SetSelected(false); }
         }
 
-        // 作ったとき、またはまだサイズが決まっていないときだけ予約する
-        bool playedSized = playedCardsParent.transform.childCount > 0
-            && playedCardsParent.transform.GetChild(0).Find("Card") != null
-            && playedCardsParent.transform.GetChild(0).Find("Card")
-                .GetComponent<RectTransform>().rect.width > 1f;
-        if (createdSlot || !playedSized) _pendingPlayedFit = pcnt;
+        bool pointViewChanged = RefreshPointCardView(gm);
+
+        // 作ったとき、またはまだサイズが決まっていないときだけ予約する。
+        // 大きさは帯の中の表示中の要素すべて(得点カード表示を含む)で等分する。
+        bool playedSized = slots.Count > 0 && slots[0].Find("Card") != null
+            && slots[0].Find("Card").GetComponent<RectTransform>().rect.width > 1f;
+        if (createdSlot || pointViewChanged || !playedSized) _pendingPlayedFit = CountActiveChildren(parentTf);
+    }
+
+    private static int CountActiveChildren(Transform t)
+    {
+        int n = 0;
+        foreach (Transform c in t) if (c.gameObject.activeSelf) n++;
+        return n;
+    }
+
+    // ===== 得点カード(ハゲタカのえじき)の表示 =====
+    // 「今出したカード」の帯の左端に、今回の得点カードを同じ大きさのカードとして出す。
+    // 持ち越している得点カードは、その隣に1枚ずつ並べる(合計を文字で出すより直感的)。
+    private bool _pointCardKnown;
+    private int _pointCard, _pointCardsLeft;
+    private int[] _carriedPointCards = new int[0];
+
+    public void ShowPointCard(int pointCard, int[] carriedCards, int cardsLeft)
+    {
+        _pointCardKnown = true;
+        _pointCard = pointCard;
+        _carriedPointCards = carriedCards ?? new int[0];
+        _pointCardsLeft = cardsLeft;
+        var gm = GetDebugOrLocalPlayer()?.gameManager;
+        if (RefreshPointCardView(gm) && playedCardsParent != null)
+            _pendingPlayedFit = CountActiveChildren(playedCardsParent.transform);
+    }
+
+    // 表示するカードの枚数が変わった(出た/消えた/増えた/減った)ときtrueを返す
+    private bool RefreshPointCardView(GameManager gm)
+    {
+        if (playedCardsParent == null) return false;
+        var parentTf = playedCardsParent.transform;
+
+        bool show = _pointCardKnown && gm != null && gm.inProgress
+                    && gm.ScoringMode == GameManager.SCORING_POINT_CARDS;
+        int want = show ? 1 + _carriedPointCards.Length : 0;
+
+        // 既存の得点カード表示を集める
+        var views = new List<Transform>();
+        foreach (Transform ch in parentTf) if (IsPointCardView(ch)) views.Add(ch);
+
+        bool changed = false;
+        while (views.Count < want)
+        {
+            // プレイヤーのスロットと同じ作り(カード + 2行のラベル)にして、大きさを揃える
+            CreatePlayedSlot(parentTf);
+            views.Add(parentTf.GetChild(parentTf.childCount - 1));
+            changed = true;
+        }
+
+        for (int i = 0; i < views.Count; i++)
+        {
+            var view = views[i];
+            view.name = POINT_CARD_VIEW + i;
+            // 左端から順に並べる
+            if (view.GetSiblingIndex() != i) view.SetSiblingIndex(i);
+
+            bool active = i < want;
+            if (view.gameObject.activeSelf != active) { view.gameObject.SetActive(active); changed = true; }
+            if (!active) continue;
+
+            bool isCurrent = i == 0;
+            int value = isCurrent ? _pointCard : _carriedPointCards[i - 1];
+
+            var num = view.Find("Card").GetComponent<NumberCardUI>();
+            num.SetupDisplay(GameManager.FormatPoints(value));
+            num.SetSelected(false);
+            // 得点カードだと一目で分かるよう、プラスは金色・マイナスは赤系にする
+            var bg = view.Find("Card/Background")?.GetComponent<Image>();
+            if (bg != null) bg.color = value >= 0 ? new Color(1f, 0.86f, 0.45f, 1f) : new Color(1f, 0.62f, 0.62f, 1f);
+
+            var label = view.Find("OwnerLabel").GetComponent<TextMeshProUGUI>();
+            label.text = isCurrent ? "Point (" + _pointCardsLeft + " left)" : "Carry";
+            label.color = new Color(1f, 0.85f, 0.25f, 1f);
+
+            var sub = view.Find("WinLabel")?.GetComponent<TextMeshProUGUI>();
+            if (sub != null) sub.text = "";
+        }
+        return changed;
     }
 
     // 「今出したカード」1人分(カード + 名前)のブロック
@@ -1949,17 +2044,6 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     {
         Debug.Log(message);
         if (statusText != null) statusText.text = message;
-    }
-
-    // 得点カードモード: ラウンド中、今回の得点カード(と持ち越し)をステータス欄に出しておく。
-    // 何を賭けて出すカードを選ぶのかが、ゲームの肝なので常に見えるようにする。
-    public void ShowPointCard(int pointCard, int carryOver)
-    {
-        string text = "Point card: " + GameManager.FormatPoints(pointCard);
-        if (carryOver != 0)
-            text += "  (carried " + GameManager.FormatPoints(carryOver)
-                  + ", total " + GameManager.FormatPoints(pointCard + carryOver) + ")";
-        ShowResult(text);
     }
 
     // 履歴1行の文字列を分解する。

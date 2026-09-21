@@ -423,70 +423,75 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         panelRt.sizeDelta = panelSize;
 
         float w = panelSize.x;
-        float rowH = portrait ? 90f : 80f;
+        float h = panelSize.y;
+
+        // 行の高さは固定値にせず、パネルの高さを「行の重みの合計」で割って決める。
+        // 固定値だと、項目を足したり画面が低かったりしたときに下のボタンがはみ出していた。
+        // (縦持ちはラベルと入力欄を縦に積み、横持ちは左右に並べる)
+        float[] weights = portrait
+            ? new[] { 1.3f, 1f, 1f, 1f, 1f, 1f, 0.8f, 1f, 1.1f, 1.2f }   // Title, Card, CardIn, Max, MaxIn, Time, Slider, ScoringLbl, ScoringBtns, Apply
+            : new[] { 1.2f, 1f, 1f, 1f, 0.9f, 1.1f, 1.2f };             // Title, Card, Max, Time, ScoringLbl, ScoringBtns, Apply
+        const float padUnits = 0.5f;   // 上下の余白(行の重みと同じ単位)
+        float totalUnits = padUnits;
+        foreach (var wt in weights) totalUnits += wt;
+        float unit = h / totalUnits;
+
+        var centers = new float[weights.Length];
+        var heights = new float[weights.Length];
+        float top = h * 0.5f - unit * padUnits * 0.5f;
+        for (int i = 0; i < weights.Length; i++)
+        {
+            float slot = unit * weights[i];
+            centers[i] = top - slot * 0.5f;
+            heights[i] = slot * 0.78f;   // 残りは行間
+            top -= slot;
+        }
 
         if (portrait)
         {
-            // 縦積み: ラベルの下に入力欄を置く
-            float y = panelSize.y * 0.5f - 90f;
-            SetRect(panel, "Title", new Vector2(0f, y), new Vector2(w * 0.9f, 90f));
-            y -= 130f;
-            SetRect(panel, "CardCountLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
-            y -= rowH + 10f;
-            SetRect(panel, "CardCountInput", new Vector2(0f, y), new Vector2(w * 0.5f, rowH));
-            y -= rowH + 40f;
-            SetRect(panel, "MaxPlayersLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
-            y -= rowH + 10f;
-            SetRect(panel, "MaxPlayersInput", new Vector2(0f, y), new Vector2(w * 0.5f, rowH));
-            y -= rowH + 40f;
-            SetRect(panel, "TimeLimitLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
-            y -= rowH + 10f;
-            SetRect(panel, "TimeLimitSlider", new Vector2(0f, y), new Vector2(w * 0.8f, rowH * 0.5f));
-            y -= rowH + 40f;
-            SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
-            y -= rowH + 10f;
+            SetRect(panel, "Title", new Vector2(0f, centers[0]), new Vector2(w * 0.9f, heights[0]));
+            SetRect(panel, "CardCountLabel", new Vector2(0f, centers[1]), new Vector2(w * 0.86f, heights[1]));
+            SetRect(panel, "CardCountInput", new Vector2(0f, centers[2]), new Vector2(w * 0.5f, heights[2]));
+            SetRect(panel, "MaxPlayersLabel", new Vector2(0f, centers[3]), new Vector2(w * 0.86f, heights[3]));
+            SetRect(panel, "MaxPlayersInput", new Vector2(0f, centers[4]), new Vector2(w * 0.5f, heights[4]));
+            SetRect(panel, "TimeLimitLabel", new Vector2(0f, centers[5]), new Vector2(w * 0.86f, heights[5]));
+            SetRect(panel, "TimeLimitSlider", new Vector2(0f, centers[6]), new Vector2(w * 0.8f, heights[6] * 0.6f));
+            SetRect(panel, "ScoringModeLabel", new Vector2(0f, centers[7]), new Vector2(w * 0.86f, heights[7]));
             // 得点方式は3択を1行に並べる
-            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, y), new Vector2(w * 0.28f, rowH));
-            SetRect(panel, "BtnScoringSum", new Vector2(0f, y), new Vector2(w * 0.28f, rowH));
-            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, y), new Vector2(w * 0.28f, rowH));
-            y -= rowH + 50f;
-            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
-            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, centers[8]), new Vector2(w * 0.28f, heights[8]));
+            SetRect(panel, "BtnScoringSum", new Vector2(0f, centers[8]), new Vector2(w * 0.28f, heights[8]));
+            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, centers[8]), new Vector2(w * 0.28f, heights[8]));
+            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.22f, centers[9]), new Vector2(w * 0.4f, heights[9]));
+            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.22f, centers[9]), new Vector2(w * 0.4f, heights[9]));
         }
         else
         {
-            // 横持ち: ラベルと入力欄を左右に並べる
-            float y = panelSize.y * 0.5f - 70f;
-            SetRect(panel, "Title", new Vector2(0f, y), new Vector2(w * 0.9f, 80f));
-            y -= 110f;
-            SetRect(panel, "CardCountLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
-            SetRect(panel, "CardCountInput", new Vector2(w * 0.25f, y), new Vector2(w * 0.24f, rowH));
-            y -= rowH + 20f;
-            SetRect(panel, "MaxPlayersLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
-            SetRect(panel, "MaxPlayersInput", new Vector2(w * 0.25f, y), new Vector2(w * 0.24f, rowH));
-            y -= rowH + 20f;
-            SetRect(panel, "TimeLimitLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
-            SetRect(panel, "TimeLimitSlider", new Vector2(w * 0.25f, y), new Vector2(w * 0.4f, rowH * 0.5f));
-            y -= rowH + 30f;
-            SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.9f, rowH));
-            y -= rowH + 15f;
+            SetRect(panel, "Title", new Vector2(0f, centers[0]), new Vector2(w * 0.9f, heights[0]));
+            SetRect(panel, "CardCountLabel", new Vector2(-w * 0.2f, centers[1]), new Vector2(w * 0.42f, heights[1]));
+            SetRect(panel, "CardCountInput", new Vector2(w * 0.25f, centers[1]), new Vector2(w * 0.24f, heights[1]));
+            SetRect(panel, "MaxPlayersLabel", new Vector2(-w * 0.2f, centers[2]), new Vector2(w * 0.42f, heights[2]));
+            SetRect(panel, "MaxPlayersInput", new Vector2(w * 0.25f, centers[2]), new Vector2(w * 0.24f, heights[2]));
+            SetRect(panel, "TimeLimitLabel", new Vector2(-w * 0.2f, centers[3]), new Vector2(w * 0.42f, heights[3]));
+            SetRect(panel, "TimeLimitSlider", new Vector2(w * 0.25f, centers[3]), new Vector2(w * 0.4f, heights[3] * 0.5f));
+            SetRect(panel, "ScoringModeLabel", new Vector2(0f, centers[4]), new Vector2(w * 0.9f, heights[4]));
             // 得点方式は3択を1行に並べる
-            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, y), new Vector2(w * 0.28f, rowH));
-            SetRect(panel, "BtnScoringSum", new Vector2(0f, y), new Vector2(w * 0.28f, rowH));
-            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, y), new Vector2(w * 0.28f, rowH));
-            y -= rowH + 30f;
-            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.19f, y), new Vector2(w * 0.34f, rowH));
-            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.19f, y), new Vector2(w * 0.34f, rowH));
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, centers[5]), new Vector2(w * 0.28f, heights[5]));
+            SetRect(panel, "BtnScoringSum", new Vector2(0f, centers[5]), new Vector2(w * 0.28f, heights[5]));
+            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, centers[5]), new Vector2(w * 0.28f, heights[5]));
+            SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.19f, centers[6]), new Vector2(w * 0.34f, heights[6]));
+            SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.19f, centers[6]), new Vector2(w * 0.34f, heights[6]));
         }
 
-        // フォントは基準解像度に合わせて統一する。
-        // シーン上に14や26といった小さい固定値が残っており、画面が大きくても拡大されなかった。
-        SetFontRange(panel, "Title", 20f, 64f);
+        // 文字の大きさも行の高さに比例させる(固定の上限だと、行が低いときに溢れる)
+        SetFontRange(panel, "Title", 1f, unit * 0.95f);
         foreach (var n in new[] { "CardCountLabel", "MaxPlayersLabel", "TimeLimitLabel", "ScoringModeLabel" })
-            SetFontRange(panel, n, 16f, 44f);
+            SetFontRange(panel, n, 1f, unit * 0.5f);
 
         // スライダーのつまみは高さに合わせた正方形にし、つまみが端で枠からはみ出さないよう余白を取る。
         // (標準部品のままだと、つまみの幅が20px固定で大きな画面では小さすぎる)
+        // 塗り(Fill)は枠の左端から右端までいっぱいに取る。
+        // つまみの可動域に合わせて塗りも内側に寄せると、最大値でも右端(と左端)に
+        // 塗られない部分が残り、角丸のつまみの隙間から見えてしまう。
         var sliderRt = panel.Find("TimeLimitSlider") as RectTransform;
         if (sliderRt != null)
         {
@@ -502,16 +507,16 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             var fillArea = sliderRt.Find("Fill Area") as RectTransform;
             if (fillArea != null)
             {
-                fillArea.offsetMin = new Vector2(knob * 0.5f, fillArea.offsetMin.y);
-                fillArea.offsetMax = new Vector2(-knob * 0.5f, fillArea.offsetMax.y);
+                fillArea.offsetMin = new Vector2(0f, fillArea.offsetMin.y);
+                fillArea.offsetMax = new Vector2(0f, fillArea.offsetMax.y);
                 var fillRt = fillArea.Find("Fill") as RectTransform;
                 if (fillRt != null) fillRt.sizeDelta = new Vector2(0f, fillRt.sizeDelta.y);
             }
         }
         foreach (var n in new[] { "CardCountInput", "MaxPlayersInput" })
-            SetFontRange(panel, n, 16f, 44f);
+            SetFontRange(panel, n, 1f, unit * 0.5f);
         foreach (var n in new[] { "BtnScoringFixed", "BtnScoringSum", "BtnScoringPointCards", "BtnApplySettings", "BtnCloseSettings" })
-            SetFontRange(panel, n, 14f, 40f);
+            SetFontRange(panel, n, 1f, unit * 0.45f);
     }
 
     // 配下の全テキストの自動サイズ範囲を揃える。
@@ -655,6 +660,11 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         le.flexibleHeight = 0f;
         le.minHeight = minHeight;
         le.preferredHeight = Mathf.Max(height, minHeight);
+        // 最小幅を0に固定する。
+        // 未指定だと、中のカードの最小幅の合計がそのまま帯の最小幅になり、
+        // 帯が画面より広がる → その広がった幅でカードを計算し直す → 見切れたまま固まる、
+        // という自己増幅が起きていた。
+        le.minWidth = 0f;
     }
 
     // ゲーム本体の縦配分コンテナに、指定した要素を組み込む。

@@ -41,8 +41,18 @@ public class GameManager : NetworkBehaviour
     // 同じ数字を出した人同士は無効(バッティング)。全員無効なら次のラウンドへ持ち越す。
     // 今のラウンドの得点カード
     [SyncVar] public int currentPointCard;
-    // 前のラウンドから持ち越している得点の合計
-    [SyncVar] public int carryOverPoints;
+    // 前のラウンドから持ち越している得点カード(古い順)。
+    // 合計ではなくカードそのものを持つ(表示側で1枚ずつ並べるため)。
+    public readonly SyncList<int> carriedPointCards = new();
+
+    private int CarriedPointsTotal()
+    {
+        int sum = 0;
+        foreach (var v in carriedPointCards) sum += v;
+        return sum;
+    }
+    // 山札の残り枚数(今めくった分を除く)
+    [SyncVar] public int pointCardsLeft;
     // 山札(サーバーのみ)。ゲーム開始時にシャッフルし、ラウンドごとに先頭から使う
     private readonly List<int> pointDeck = new();
 
@@ -112,7 +122,7 @@ public class GameManager : NetworkBehaviour
             {
                 ui.RefreshBoardViews();
                 ui.RequestFullLayoutRebuild();
-                if (ScoringMode == SCORING_POINT_CARDS) ui.ShowPointCard(currentPointCard, carryOverPoints);
+                if (ScoringMode == SCORING_POINT_CARDS) ui.ShowPointCard(currentPointCard, carriedPointCards.ToArray(), pointCardsLeft);
             }
         }
     }
@@ -283,7 +293,7 @@ public class GameManager : NetworkBehaviour
         roundsPlayed = 0;
         roundHistoryLog.Clear();
         currentPointCard = 0;
-        carryOverPoints = 0;
+        carriedPointCards.Clear();
         if (ScoringMode == SCORING_POINT_CARDS) BuildPointDeck();
 
         foreach (var playerCom in room.playerComponents)
@@ -351,14 +361,18 @@ public class GameManager : NetworkBehaviour
     private void StartRound()
     {
         bool pointMode = ScoringMode == SCORING_POINT_CARDS && roundsPlayed < pointDeck.Count;
-        if (pointMode) currentPointCard = pointDeck[roundsPlayed];
+        if (pointMode)
+        {
+            currentPointCard = pointDeck[roundsPlayed];
+            pointCardsLeft = pointDeck.Count - (roundsPlayed + 1);
+        }
         // 得点カードはRpcの引数でも渡す(SyncVarより先にRpcが届いても表示できるように)
-        RpcRoundStartCutIn(roundsPlayed + 1, CARDCOUNT, pointMode, currentPointCard, carryOverPoints);
+        RpcRoundStartCutIn(roundsPlayed + 1, CARDCOUNT, pointMode, currentPointCard, carriedPointCards.ToArray(), pointCardsLeft);
         StartCoroutine(RoundTimerRoutine());
     }
 
     [ClientRpc]
-    private void RpcRoundStartCutIn(int roundNumber, int totalRounds, bool pointMode, int pointCard, int carryOver)
+    private void RpcRoundStartCutIn(int roundNumber, int totalRounds, bool pointMode, int pointCard, int[] carriedCards, int cardsLeft)
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.ShowRoundCutIn(roundNumber, totalRounds,
@@ -370,8 +384,8 @@ public class GameManager : NetworkBehaviour
         uiManager?.HideRoundResultPopup();
         // 前ラウンドの結果表示が残り続けないよう、新しいラウンドの開始時にクリアする
         uiManager?.ShowResult("");
-        // 得点カードモードでは、ラウンド中ずっと今の得点カードを表示しておく
-        if (pointMode) uiManager?.ShowPointCard(pointCard, carryOver);
+        // 得点カードモードでは、「今出したカード」の横に今の得点カードを出しておく
+        if (pointMode) uiManager?.ShowPointCard(pointCard, carriedCards, cardsLeft);
     }
 
     // ラウンドの制限時間を管理する。全員が確定した時点で残り時間をROUND_TIME_CHMIN秒まで短縮し、
@@ -643,7 +657,7 @@ public class GameManager : NetworkBehaviour
     private void ResolvePointCardRound(List<int> playedCards, List<int> winners,
         out string resultLabel, out string message, out string winnerLabel)
     {
-        int pot = currentPointCard + carryOverPoints;
+        int pot = currentPointCard + CarriedPointsTotal();
 
         var counts = new Dictionary<int, int>();
         foreach (var v in playedCards)
@@ -668,7 +682,7 @@ public class GameManager : NetworkBehaviour
         {
             roundWins[taker] = roundWins[taker] + pot;
             winners.Add(taker);
-            carryOverPoints = 0;
+            carriedPointCards.Clear();
             resultLabel = FormatPoints(pot) + "pt";
             message = "Player " + taker + " takes " + FormatPoints(pot) + "pt";
             return;
@@ -678,13 +692,14 @@ public class GameManager : NetworkBehaviour
         bool lastRound = roundsPlayed + 1 >= CARDCOUNT;
         if (lastRound)
         {
-            carryOverPoints = 0;
+            carriedPointCards.Clear();
             resultLabel = "Lost " + FormatPoints(pot);
             message = "all cards clashed, " + FormatPoints(pot) + " is discarded";
         }
         else
         {
-            carryOverPoints = pot;
+            // 今回の得点カードを持ち越しの列に加える(次のラウンドの得点カードと一緒に取り合う)
+            carriedPointCards.Add(currentPointCard);
             resultLabel = "Carry " + FormatPoints(pot);
             message = "all cards clashed, " + FormatPoints(pot) + " carries over";
         }
