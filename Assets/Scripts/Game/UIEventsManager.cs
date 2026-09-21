@@ -143,6 +143,24 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         var btnSum = panel.Find("BtnScoringSum")?.GetComponent<UnityEngine.UI.Button>();
         if (btnSum != null) { btnSum.onClick.RemoveAllListeners(); btnSum.onClick.AddListener(() => SelectScoringMode(1)); }
 
+        // 得点カード(ハゲタカのえじき)のボタン。シーンには無いので、既存のボタンを複製して見た目を揃える。
+        var btnPointTf = panel.Find("BtnScoringPointCards");
+        if (btnPointTf == null && btnSum != null)
+        {
+            var clone = Instantiate(btnSum.gameObject, panel);
+            clone.name = "BtnScoringPointCards";
+            var cloneLabel = clone.GetComponentInChildren<TMP_Text>(true);
+            if (cloneLabel != null) cloneLabel.text = "Point Cards (Hagetaka)";
+            btnPointTf = clone.transform;
+        }
+        var btnPoint = btnPointTf != null ? btnPointTf.GetComponent<UnityEngine.UI.Button>() : null;
+        if (btnPoint != null)
+        {
+            // 複製元のインスペクタ設定のリスナーが残らないよう、イベントごと作り直す
+            btnPoint.onClick = new UnityEngine.UI.Button.ButtonClickedEvent();
+            btnPoint.onClick.AddListener(() => SelectScoringMode(GameManager.SCORING_POINT_CARDS));
+        }
+
         // 選択時間のスライダー(シーンには無いのでここで作る。位置はResponsiveCanvasScalerが決める)
         EnsureTimeLimitControls(panel);
 
@@ -233,7 +251,15 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     {
         _pendingScoringMode = mode;
         var panel = FindSettingsPanel();
-        if (panel != null) RefreshScoringButtonHighlight(panel);
+        if (panel == null) return;
+        RefreshScoringButtonHighlight(panel);
+
+        // ハゲタカのえじきは1~15の15枚で遊ぶので、選んだらカード枚数を15にしておく(変更は可能)
+        if (mode == GameManager.SCORING_POINT_CARDS)
+        {
+            var cardCountInput = panel.Find("CardCountInput")?.GetComponent<TMP_InputField>();
+            if (cardCountInput != null) cardCountInput.text = GameManager.CARD_COUNT_LIMIT.ToString();
+        }
     }
 
     private void RefreshScoringButtonHighlight(Transform panel)
@@ -244,6 +270,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         Color unselectedColor = new Color(0.35f, 0.38f, 0.45f, 1f);
         if (btnFixedImg != null) btnFixedImg.color = (_pendingScoringMode == 0) ? selectedColor : unselectedColor;
         if (btnSumImg != null) btnSumImg.color = (_pendingScoringMode == 1) ? selectedColor : unselectedColor;
+        var btnPointImg = panel.Find("BtnScoringPointCards")?.GetComponent<UnityEngine.UI.Image>();
+        if (btnPointImg != null) btnPointImg.color = (_pendingScoringMode == GameManager.SCORING_POINT_CARDS) ? selectedColor : unselectedColor;
     }
 
     // ===== 選択時間(スライダー) =====
@@ -538,13 +566,15 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     }
 
     // ラウンド開始時のカットイン演出を表示する。選択状態もここでリセットする。
-    public void ShowRoundCutIn(int roundNumber, int totalRounds)
+    // subtitle: 得点カードモードでは今回の得点カード(例: "Card +7")。通常はnull。
+    public void ShowRoundCutIn(int roundNumber, int totalRounds, string subtitle)
     {
         _selectedCardIndex = -1;
         if (confirmButtonGO != null) confirmButtonGO.SetActive(false);
 
         if (cutInPanel == null || cutInText == null) return;
-        cutInText.text = "ROUND " + roundNumber + " / " + totalRounds;
+        cutInText.text = "ROUND " + roundNumber + " / " + totalRounds
+            + (string.IsNullOrEmpty(subtitle) ? "" : "   " + subtitle);
         if (_cutInCoroutine != null) StopCoroutine(_cutInCoroutine);
         _cutInCoroutine = StartCoroutine(CutInRoutine());
     }
@@ -1921,6 +1951,53 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (statusText != null) statusText.text = message;
     }
 
+    // 得点カードモード: ラウンド中、今回の得点カード(と持ち越し)をステータス欄に出しておく。
+    // 何を賭けて出すカードを選ぶのかが、ゲームの肝なので常に見えるようにする。
+    public void ShowPointCard(int pointCard, int carryOver)
+    {
+        string text = "Point card: " + GameManager.FormatPoints(pointCard);
+        if (carryOver != 0)
+            text += "  (carried " + GameManager.FormatPoints(carryOver)
+                  + ", total " + GameManager.FormatPoints(pointCard + carryOver) + ")";
+        ShowResult(text);
+    }
+
+    // 履歴1行の文字列を分解する。
+    // 形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel|winner0,winner1,..."
+    // 6番目(勝者一覧)が無い古い行は、最大値を出した人を勝者とみなす。
+    public static bool TryParseHistoryEntry(string entry, out int roundNumber,
+        out List<int> cards, out List<int> winners, out string resultLabel)
+    {
+        roundNumber = 0;
+        cards = new List<int>();
+        winners = new List<int>();
+        resultLabel = "";
+        if (string.IsNullOrEmpty(entry)) return false;
+
+        var parts = entry.Split('|');
+        if (parts.Length < 5) return false;
+
+        int.TryParse(parts[0], out roundNumber);
+        if (!string.IsNullOrEmpty(parts[1]))
+            foreach (var t in parts[1].Split(','))
+                cards.Add(int.TryParse(t, out int v) ? v : 0);
+        resultLabel = parts[4];
+
+        if (parts.Length >= 6)
+        {
+            if (!string.IsNullOrEmpty(parts[5]))
+                foreach (var t in parts[5].Split(','))
+                    if (int.TryParse(t, out int w)) winners.Add(w);
+        }
+        else
+        {
+            int best = 0;
+            foreach (var v in cards) if (v > best) best = v;
+            for (int i = 0; i < cards.Count; i++) if (best > 0 && cards[i] == best) winners.Add(i);
+        }
+        return true;
+    }
+
     // ゲーム終了時、通常のラウンド結果表示(小さく目立たない)とは別に、
     // 明確に分かる専用オーバーレイを表示する。プレイヤーがタップ/クリックするまで残り続ける。
     public void ShowGameOverPanel(string message)
@@ -2009,17 +2086,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         ClearHistoryPanel();
         for (int i = 0; i < gm.roundHistoryLog.Count; i++)
         {
-            // ログ形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel"
-            var parts = gm.roundHistoryLog[i].Split('|');
-            if (parts.Length < 5) continue;
-            int.TryParse(parts[0], out int roundNumber);
-            var cards = new List<int>();
-            if (!string.IsNullOrEmpty(parts[1]))
-                foreach (var s in parts[1].Split(','))
-                    if (int.TryParse(s, out int v)) cards.Add(v);
-            int.TryParse(parts[2], out int winnerId);
-            bool tie = parts[3] == "1";
-            AppendHistoryLine(roundNumber, cards, winnerId, tie, parts[4]);
+            if (!TryParseHistoryEntry(gm.roundHistoryLog[i], out int roundNumber,
+                    out List<int> cards, out List<int> winners, out string resultLabel))
+                continue;
+            AppendHistoryLine(roundNumber, cards, winners, resultLabel);
         }
         // 再構築が終わったらキャッシュを解除し、
         // 次回は実際のrectから測り直せるようにする
@@ -2147,9 +2217,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
     // roundHistoryLog(SyncList)の変更を受けて、スクロールビューに1行追記する。
     // 表示はテキストの羅列ではなく、カードUIを使ったリッチな1行にする。
-    public void AppendHistoryLine(int roundNumber, List<int> playedCards, int winnerId, bool tie, string resultLabel)
+    // winners: 得点を得たプレイヤー(サーバーが決めたもの)。そのカードを強調する。
+    public void AppendHistoryLine(int roundNumber, List<int> playedCards, List<int> winners, string resultLabel)
     {
-        Debug.Log(roundNumber + "R: " + string.Join(",", playedCards) + " => " + (tie ? "Tie" : ("Winner: " + winnerId)) + " (" + resultLabel + ")");
+        Debug.Log(roundNumber + "R: " + string.Join(",", playedCards) + " => winners [" + string.Join(",", winners) + "] (" + resultLabel + ")");
         var panel = FindHistoryPanel();
         if (panel == null) return;
         var content = panel.Find("Viewport/Content");
@@ -2230,12 +2301,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             cardRt.anchoredPosition = new Vector2(cardsStartX + i * cardSpacing + cardSpacing * 0.5f, 0f);
             var numUI = cardGo.GetComponent<NumberCardUI>();
             numUI.SetupDisplay(playedCards[i].ToString());
-            // 最大値を出した全員を強調する。
-            // 同点でも得点は入るので、winnerId一致だけで判定すると
-            // 同点時に誰も強調されない。
-            int bestInRow = 0;
-            foreach (var v in playedCards) if (v > bestInRow) bestInRow = v;
-            numUI.SetSelected(playedCards[i] > 0 && playedCards[i] == bestInRow);
+            // 得点を得た全員を強調する(同点で複数人が得点した場合も全員)。
+            // 得点カードモードでは最小値の人や2番目に大きい人が取ることもあるので、
+            // 「最大値かどうか」ではなくサーバーが決めた勝者で判断する。
+            numUI.SetSelected(winners != null && winners.Contains(i));
         }
 
         // 結果テキスト(右寄せ)
@@ -2257,9 +2326,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         resultTmp.alignment = TextAlignmentOptions.MidlineRight;
         // 同点でも得点は入るので、常に強調色にする。
         // (以前はtieだとグレーになり、変動ptが目立たなかった)
+        // マイナスの得点を取った行は赤くして、損をしたことが分かるようにする
         resultTmp.color = string.IsNullOrEmpty(resultLabel)
             ? new Color(0.8f, 0.8f, 0.8f, 1f)
-            : new Color(1f, 0.85f, 0.25f, 1f);
+            : resultLabel.StartsWith("-")
+                ? new Color(1f, 0.45f, 0.45f, 1f)
+                : new Color(1f, 0.85f, 0.25f, 1f);
 
         // 追加のたびに一番下(最新)まで自動スクロールする
         var scrollRect = panel.GetComponent<UnityEngine.UI.ScrollRect>();
@@ -2447,7 +2519,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     private GameObject _resultPopup;
     private float _resultPopupUntil = 0f;
 
-    public void ShowRoundResultPopup(int[] picks, int winnerId, bool tie, string message, float seconds)
+    // winners: 得点を得たプレイヤー。winnerLabel: そのカードの下に出す文字("WIN"や"+7pt")
+    public void ShowRoundResultPopup(int[] picks, int[] winners, string message, string winnerLabel, float seconds)
     {
         EnsureResultPopup();
         _resultPopupUntil = Time.time + seconds;
@@ -2466,10 +2539,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             slot.gameObject.SetActive(i < n);
             if (i >= n) continue;
 
-            // 最大値を出した全員を勝者として扱う。
-            // winnerIdが-1なら勝者なし(全員同じカード=引き分け)。
-            bool isWinner = winnerId >= 0 && picks != null && i < picks.Length && picks[i] > 0
-                && picks[i] == BestPick(picks);
+            // 勝者はサーバーが決めたものをそのまま使う(空なら勝者なし)。
+            bool isWinner = winners != null && System.Array.IndexOf(winners, i) >= 0;
 
             var num = slot.Find("Card").GetComponent<NumberCardUI>();
             num.SetupDisplay(picks[i] > 0 ? picks[i].ToString() : "-");
@@ -2481,8 +2552,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             var winLbl = slot.Find("WinLabel")?.GetComponent<TextMeshProUGUI>();
             if (winLbl != null)
             {
-                winLbl.text = isWinner ? "WIN" : "";
-                winLbl.color = new Color(1f, 0.85f, 0.25f, 1f);
+                winLbl.text = isWinner ? winnerLabel : "";
+                bool negative = !string.IsNullOrEmpty(winnerLabel) && winnerLabel.StartsWith("-");
+                winLbl.color = negative ? new Color(1f, 0.45f, 0.45f, 1f) : new Color(1f, 0.85f, 0.25f, 1f);
             }
         }
 
@@ -2569,13 +2641,6 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     }
 
     // 公開されたカードの最大値(同点判定に使う)
-    private static int BestPick(int[] picks)
-    {
-        int b = 0;
-        if (picks != null) foreach (var v in picks) if (v > b) b = v;
-        return b;
-    }
-
     // ポップアップ用の1枚分(カード + 名前)
     private void CreateResultSlot(Transform parent)
     {

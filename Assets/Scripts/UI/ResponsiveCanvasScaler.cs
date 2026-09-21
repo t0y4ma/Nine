@@ -445,8 +445,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             y -= rowH + 40f;
             SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
             y -= rowH + 10f;
-            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
-            SetRect(panel, "BtnScoringSum", new Vector2(w * 0.22f, y), new Vector2(w * 0.4f, rowH));
+            // 得点方式は3択を1行に並べる
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, y), new Vector2(w * 0.28f, rowH));
+            SetRect(panel, "BtnScoringSum", new Vector2(0f, y), new Vector2(w * 0.28f, rowH));
+            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, y), new Vector2(w * 0.28f, rowH));
             y -= rowH + 50f;
             SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
             SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.22f, y), new Vector2(w * 0.4f, rowH));
@@ -468,8 +470,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             y -= rowH + 30f;
             SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.9f, rowH));
             y -= rowH + 15f;
-            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.23f, y), new Vector2(w * 0.42f, rowH));
-            SetRect(panel, "BtnScoringSum", new Vector2(w * 0.23f, y), new Vector2(w * 0.42f, rowH));
+            // 得点方式は3択を1行に並べる
+            SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.3f, y), new Vector2(w * 0.28f, rowH));
+            SetRect(panel, "BtnScoringSum", new Vector2(0f, y), new Vector2(w * 0.28f, rowH));
+            SetRect(panel, "BtnScoringPointCards", new Vector2(w * 0.3f, y), new Vector2(w * 0.28f, rowH));
             y -= rowH + 30f;
             SetRect(panel, "BtnApplySettings", new Vector2(-w * 0.19f, y), new Vector2(w * 0.34f, rowH));
             SetRect(panel, "BtnCloseSettings", new Vector2(w * 0.19f, y), new Vector2(w * 0.34f, rowH));
@@ -506,7 +510,7 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         }
         foreach (var n in new[] { "CardCountInput", "MaxPlayersInput" })
             SetFontRange(panel, n, 16f, 44f);
-        foreach (var n in new[] { "BtnScoringFixed", "BtnScoringSum", "BtnApplySettings", "BtnCloseSettings" })
+        foreach (var n in new[] { "BtnScoringFixed", "BtnScoringSum", "BtnScoringPointCards", "BtnApplySettings", "BtnCloseSettings" })
             SetFontRange(panel, n, 14f, 40f);
     }
 
