@@ -143,6 +143,9 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         var btnSum = panel.Find("BtnScoringSum")?.GetComponent<UnityEngine.UI.Button>();
         if (btnSum != null) { btnSum.onClick.RemoveAllListeners(); btnSum.onClick.AddListener(() => SelectScoringMode(1)); }
 
+        // 選択時間のスライダー(シーンには無いのでここで作る。位置はResponsiveCanvasScalerが決める)
+        EnsureTimeLimitControls(panel);
+
         // GameOverPanel / HistoryPanel / LeaveRoomボタンの結線
         var btnCloseGameOver = canvas.transform.Find("GameOverPanel/BtnCloseGameOver")?.GetComponent<UnityEngine.UI.Button>();
         if (btnCloseGameOver != null) { btnCloseGameOver.onClick.RemoveAllListeners(); btnCloseGameOver.onClick.AddListener(ButtonCloseGameOver); }
@@ -185,6 +188,14 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         _pendingScoringMode = gm != null ? gm.ScoringMode : 0;
         RefreshScoringButtonHighlight(panel);
+
+        var timeSlider = EnsureTimeLimitControls(panel);
+        if (timeSlider != null)
+        {
+            int idx = SecondsToTimeSliderIndex(gm != null ? gm.RoundTimeLimit : GameManager.ROUND_TIME_DEFAULT);
+            timeSlider.SetValueWithoutNotify(idx);
+            UpdateTimeLimitLabel(panel, idx);
+        }
 
         panel.gameObject.SetActive(true);
     }
@@ -235,6 +246,92 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (btnSumImg != null) btnSumImg.color = (_pendingScoringMode == 1) ? selectedColor : unselectedColor;
     }
 
+    // ===== 選択時間(スライダー) =====
+    // 目盛りの位置 → 秒数。30秒から15秒刻みで5分まで、右端は無制限(0)。
+    private const int TIME_SLIDER_UNLIMITED_INDEX =
+        (GameManager.ROUND_TIME_MAX - GameManager.ROUND_TIME_MIN) / GameManager.ROUND_TIME_STEP + 1;
+
+    private static int TimeSliderIndexToSeconds(int index)
+    {
+        if (index >= TIME_SLIDER_UNLIMITED_INDEX) return 0;
+        return GameManager.ROUND_TIME_MIN + Mathf.Max(0, index) * GameManager.ROUND_TIME_STEP;
+    }
+
+    private static int SecondsToTimeSliderIndex(int seconds)
+    {
+        if (seconds <= 0) return TIME_SLIDER_UNLIMITED_INDEX;
+        int clamped = Mathf.Clamp(seconds, GameManager.ROUND_TIME_MIN, GameManager.ROUND_TIME_MAX);
+        return Mathf.RoundToInt((clamped - GameManager.ROUND_TIME_MIN) / (float)GameManager.ROUND_TIME_STEP);
+    }
+
+    private static string FormatTimeLimit(int seconds)
+    {
+        if (seconds <= 0) return "Unlimited";
+        int m = seconds / 60;
+        int sec = seconds % 60;
+        if (m == 0) return sec + "s";
+        return sec == 0 ? m + " min" : m + " min " + sec + "s";
+    }
+
+    private void UpdateTimeLimitLabel(Transform panel, int index)
+    {
+        var label = panel.Find("TimeLimitLabel")?.GetComponent<TMP_Text>();
+        if (label != null) label.text = "Time Limit: " + FormatTimeLimit(TimeSliderIndexToSeconds(index));
+    }
+
+    // 選択時間のラベルとスライダーを(無ければ)作る。
+    // スライダー本体はUnity標準の部品(DefaultControls)をそのまま使う。
+    private Slider EnsureTimeLimitControls(Transform panel)
+    {
+        if (panel.Find("TimeLimitLabel") == null)
+        {
+            var go = new GameObject("TimeLimitLabel", typeof(RectTransform));
+            go.transform.SetParent(panel, false);
+            var t = go.AddComponent<TextMeshProUGUI>();
+            // 他の設定項目のラベルと同じ見た目にする
+            var refLabel = panel.Find("CardCountLabel")?.GetComponent<TMP_Text>();
+            if (refLabel != null)
+            {
+                t.font = refLabel.font;
+                t.color = refLabel.color;
+                t.alignment = refLabel.alignment;
+            }
+            t.enableAutoSizing = true;
+            t.raycastTarget = false;
+        }
+
+        var sliderTf = panel.Find("TimeLimitSlider");
+        if (sliderTf == null)
+        {
+            var res = new DefaultControls.Resources
+            {
+                background = roundedButtonSprite,
+                standard = roundedButtonSprite,
+                knob = roundedButtonSprite
+            };
+            var go = DefaultControls.CreateSlider(res);
+            go.name = "TimeLimitSlider";
+            go.transform.SetParent(panel, false);
+
+            var slider = go.GetComponent<Slider>();
+            slider.minValue = 0;
+            slider.maxValue = TIME_SLIDER_UNLIMITED_INDEX;
+            slider.wholeNumbers = true;
+            slider.onValueChanged.AddListener(v => UpdateTimeLimitLabel(panel, Mathf.RoundToInt(v)));
+
+            // 得点方式ボタン(選択中/非選択)と同じ配色にする
+            var bg = go.transform.Find("Background")?.GetComponent<Image>();
+            if (bg != null) bg.color = new Color(0.35f, 0.38f, 0.45f, 1f);
+            var fill = go.transform.Find("Fill Area/Fill")?.GetComponent<Image>();
+            if (fill != null) fill.color = new Color(0.29f, 0.72f, 0.56f, 1f);
+            var knob = go.transform.Find("Handle Slide Area/Handle")?.GetComponent<Image>();
+            if (knob != null) knob.color = Color.white;
+
+            sliderTf = go.transform;
+        }
+        return sliderTf.GetComponent<Slider>();
+    }
+
     public void ButtonApplySettings()
     {
         var panel = FindSettingsPanel();
@@ -256,8 +353,13 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         }
         maxPlayers = Mathf.Clamp(maxPlayers, 2, GameManager.MAX_PLAYERS_LIMIT);
 
+        var timeSliderApply = panel.Find("TimeLimitSlider")?.GetComponent<Slider>();
+        int roundTimeLimit = timeSliderApply != null
+            ? TimeSliderIndexToSeconds(Mathf.RoundToInt(timeSliderApply.value))
+            : GameManager.ROUND_TIME_DEFAULT;
+
         string roomId = inputField != null ? inputField.text : "";
-        roomManager.CmdUpdateSettings(roomId, cardCount, _pendingScoringMode, maxPlayers, connectionToClient);
+        roomManager.CmdUpdateSettings(roomId, cardCount, _pendingScoringMode, maxPlayers, roundTimeLimit, connectionToClient);
 
         panel.gameObject.SetActive(false);
         SetModalDimActive(false);
@@ -382,6 +484,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         targetPlayer.CmdSetReady(newReady);
     }
 
+    // この遷移中にNextを押したプレイヤー。押した人にはボタンを出し直さない。
+    // (デバッグでBotを切り替えて操作する場合があるため、プレイヤーごとに覚える)
+    private readonly HashSet<Player> _nextPressedBy = new();
+
     public void ButtonNextRound()
     {
         // 次へ進むならポップアップは役目を終えるので閉じる
@@ -389,6 +495,10 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         var targetPlayer = GetDebugOrLocalPlayer();
         if (targetPlayer == null) return;
+
+        // 一度押したら消す(遷移が終わるまで再表示しない)
+        _nextPressedBy.Add(targetPlayer);
+        if (nextRoundButtonGO != null) nextRoundButtonGO.SetActive(false);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         if (debugTargetPlayer != null)
@@ -404,8 +514,12 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     public void UpdateTransitionBar(float remainingFraction)
     {
         bool show = remainingFraction > 0f;
+        // 遷移が終わったら「押した」記録を消し、次のラウンド後にまた出せるようにする
+        if (!show) _nextPressedBy.Clear();
         if (transitionBarPanel != null) transitionBarPanel.SetActive(show);
-        if (nextRoundButtonGO != null) nextRoundButtonGO.SetActive(show);
+        var nextTarget = GetDebugOrLocalPlayer();
+        bool alreadyPressed = nextTarget != null && _nextPressedBy.Contains(nextTarget);
+        if (nextRoundButtonGO != null) nextRoundButtonGO.SetActive(show && !alreadyPressed);
         _transitionBarTargetFill = Mathf.Clamp01(remainingFraction);
         // 満タンから始める瞬間・消す瞬間は補間せず即座に反映する
         if (transitionBarFill != null && (!show || remainingFraction > transitionBarFill.fillAmount + 0.3f))

@@ -17,7 +17,13 @@ public class GameManager : NetworkBehaviour
 
     private const float ROUND_TRANSITION_DELAY = 5.0f; // 最大の緩衝時間(秒)。全員がNextを押せばこれより早く進む
     private const float TRANSITION_PROGRESS_SEND_INTERVAL = 0.1f; // 進捗バー送信間隔(秒)
-    private const float ROUND_TIME_LIMIT = 45f; // ラウンドの制限時間(30~60秒の間)
+    // ラウンドの選択時間(秒)。ホストが設定画面のスライダーで変更する。
+    // 30秒~5分を15秒刻みで選べ、0は無制限を表す。
+    public const int ROUND_TIME_DEFAULT = 45;
+    public const int ROUND_TIME_MIN = 30;
+    public const int ROUND_TIME_MAX = 300;
+    public const int ROUND_TIME_STEP = 15;
+    [SyncVar] public int RoundTimeLimit = ROUND_TIME_DEFAULT;
     private const float ROUND_TIME_CHMIN = 3f; // 全員が確定した後、残り時間をこの秒数まで短縮する
     private const float ROUND_TIME_SEND_INTERVAL = 0.1f;
 
@@ -135,7 +141,7 @@ public class GameManager : NetworkBehaviour
 
 // 設定変更(カード枚数・得点方式)。ゲーム開始前、ホストのみが呼び出せる想定。
     [Server]
-    public void UpdateSettings(int newCardCount, int newScoringMode, int newMaxPlayers)
+    public void UpdateSettings(int newCardCount, int newScoringMode, int newMaxPlayers, int newRoundTimeLimit)
     {
         if (inProgress) return;
         if (room != null) room.RemoveEmptySeats();
@@ -148,6 +154,10 @@ public class GameManager : NetworkBehaviour
         CARDCOUNT = newCardCount;
         ScoringMode = newScoringMode;
         MaxPlayers = newMaxPlayers;
+        // 0以下は無制限。それ以外は範囲内に収める
+        RoundTimeLimit = newRoundTimeLimit <= 0
+            ? 0
+            : Mathf.Clamp(newRoundTimeLimit, ROUND_TIME_MIN, ROUND_TIME_MAX);
 
         // 既存プレイヤーの手札状態を新しいカード枚数に合わせて作り直す
         used_Players.Clear();
@@ -335,12 +345,17 @@ public class GameManager : NetworkBehaviour
 
     // ラウンドの制限時間を管理する。全員が確定した時点で残り時間をROUND_TIME_CHMIN秒まで短縮し、
     // 0になったら(誰かが未確定でも)ラウンドを強制終了して公開する。
+    // 無制限の場合は時間切れが起きず、全員の確定後の短縮だけで終わる。
     [Server]
     private System.Collections.IEnumerator RoundTimerRoutine()
     {
-        float remaining = ROUND_TIME_LIMIT;
+        bool unlimited = RoundTimeLimit <= 0;
+        float remaining = unlimited ? float.PositiveInfinity : RoundTimeLimit;
+        // 残り時間バーの基準。無制限のときは、短縮後の数秒をバーで見せるために短縮時間を基準にする
+        // (確定待ちの間は満タンのまま表示される)
+        float barTotal = unlimited ? ROUND_TIME_CHMIN : RoundTimeLimit;
         float lastSent = -1f;
-        RpcRoundTimer(remaining, ROUND_TIME_LIMIT);
+        RpcRoundTimer(barTotal, barTotal);
 
         while (remaining > 0f)
         {
@@ -349,17 +364,19 @@ public class GameManager : NetworkBehaviour
                 remaining = Mathf.Min(remaining, ROUND_TIME_CHMIN);
             }
 
-            if (lastSent < 0 || remaining - lastSent <= -ROUND_TIME_SEND_INTERVAL || lastSent - remaining >= ROUND_TIME_SEND_INTERVAL)
+            // 無制限で待っている間は、送る値が変わらないので送信しない
+            if (!float.IsInfinity(remaining)
+                && (lastSent < 0 || Mathf.Abs(lastSent - remaining) >= ROUND_TIME_SEND_INTERVAL))
             {
                 lastSent = remaining;
-                RpcRoundTimer(Mathf.Max(0, remaining), ROUND_TIME_LIMIT);
+                RpcRoundTimer(Mathf.Max(0, remaining), barTotal);
             }
 
             yield return null;
             remaining -= Time.deltaTime;
         }
 
-        RpcRoundTimer(0, ROUND_TIME_LIMIT);
+        RpcRoundTimer(0, barTotal);
 
         StartCoroutine(EndTurnRoutine());
     }

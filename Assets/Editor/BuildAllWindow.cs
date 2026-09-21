@@ -212,11 +212,13 @@ public class BuildAllWindow : EditorWindow
             EditorStyles.boldLabel);
 
         EditorGUILayout.HelpBox(
-            "1. WebGL Build\n" +
-            "2. Linux Server Build\n" +
+            "0. (If needed) Switch to Linux and recompile scripts\n" +
+            "1. Linux Server Build\n" +
+            "2. WebGL Build\n" +
             "3. Switch Active Build Target to WebGL\n" +
             "4. Create ZIP\n" +
-            "5. Apply exclusion settings",
+            "5. Apply exclusion settings\n" +
+            "6. Reset Standalone Subtarget to Player (always)",
             MessageType.None);
 
 
@@ -533,7 +535,124 @@ public class BuildAllWindow : EditorWindow
     // Build All
     // ============================================================
 
+    // ============================================================
+    // Linux Server の準備(スクリプトの再コンパイル)
+    // ============================================================
+    //
+    // Linux Server(IL2CPP)のビルドには、sysrootパッケージの型が
+    // UnityEditor.Sysroot を継承している必要がある。
+    // これは UNITY_STANDALONE_LINUX_API が定義された状態、
+    // つまり「アクティブなビルドターゲットが Linux の状態で
+    // スクリプトがコンパイルされている」ときだけ成り立つ。
+    //
+    // WebGL等の状態でコンパイルされたまま Linux をビルドすると、
+    // 「No Linux sysroot found for x64」で失敗する。
+    // (BuildPlayerの中でターゲットが切り替わっても、
+    //   その呼び出しの間にスクリプトは再コンパイルされないため)
+    //
+    // そこで、必要なら先に Linux へ切り替えて再コンパイルを待ち、
+    // ドメインリロード後に続きを自動で実行する。
+
+    private const string PendingBuildKey =
+        "BuildAllWindow_PendingAfterLinuxSwitch";
+
+
+    private static bool IsLinuxSysrootReady()
+    {
+        Type sysrootType =
+            typeof(Editor).Assembly.GetType(
+                "UnityEditor.Sysroot");
+
+        if (sysrootType == null)
+        {
+            return false;
+        }
+
+        return TypeCache
+            .GetTypesDerivedFrom(sysrootType)
+            .Count > 0;
+    }
+
+
+    [InitializeOnLoadMethod]
+    private static void ResumePendingBuild()
+    {
+        if (!SessionState.GetBool(
+                PendingBuildKey,
+                false))
+        {
+            return;
+        }
+
+        // 先に消しておく(失敗しても無限に繰り返さないため)
+        SessionState.EraseBool(
+            PendingBuildKey);
+
+        EditorApplication.delayCall += () =>
+        {
+            if (!IsLinuxSysrootReady())
+            {
+                EditorUtility.DisplayDialog(
+                    "Build Error",
+                    "Switched to Linux, but the Linux sysroot is still not available.\n\n" +
+                    "Check that com.unity.sdk.linux-x86_64 and " +
+                    "com.unity.toolchain.win-x86_64-linux are installed.",
+                    "OK");
+
+                return;
+            }
+
+            var window =
+                GetWindow<BuildAllWindow>(
+                    "Build Settings");
+
+            window.RunBuildAll();
+        };
+    }
+
+
     private void BuildAll()
+    {
+        if (!ValidateSettings())
+        {
+            return;
+        }
+
+
+        if (IsLinuxSysrootReady())
+        {
+            RunBuildAll();
+
+            return;
+        }
+
+
+        Debug.Log(
+            "Build All: switching to Linux and recompiling scripts " +
+            "before building. The build will continue automatically.");
+
+        SessionState.SetBool(
+            PendingBuildKey,
+            true);
+
+
+        if (EditorUserBuildSettings.activeBuildTarget ==
+            BuildTarget.StandaloneLinux64)
+        {
+            // 既にLinuxだが、スクリプトが別ターゲットの状態でコンパイルされている
+            UnityEditor.Compilation.CompilationPipeline
+                .RequestScriptCompilation();
+        }
+        else
+        {
+            EditorUserBuildSettings.SwitchActiveBuildTarget(
+                BuildTargetGroup.Standalone,
+                BuildTarget.StandaloneLinux64);
+        }
+    }
+
+
+    private void RunBuildAll()
     {
         try
         {
@@ -554,36 +673,37 @@ public class BuildAllWindow : EditorWindow
 
 
             // ====================================================
-            // WebGL
-            // ====================================================
-
-            EditorUtility.DisplayProgressBar(
-                "Build All",
-                "Building WebGL...",
-                0.1f);
-
-
-            if (!BuildWebGL())
-            {
-                throw new Exception(
-                    "WebGL build failed.");
-            }
-
-
-            // ====================================================
             // Linux Server
+            // (スクリプトがLinux向けにコンパイルされている今のうちに先に行う)
             // ====================================================
 
             EditorUtility.DisplayProgressBar(
                 "Build All",
                 "Building Linux Server...",
-                0.4f);
+                0.1f);
 
 
             if (!BuildLinuxServer())
             {
                 throw new Exception(
                     "Linux Server build failed.");
+            }
+
+
+            // ====================================================
+            // WebGL
+            // ====================================================
+
+            EditorUtility.DisplayProgressBar(
+                "Build All",
+                "Building WebGL...",
+                0.4f);
+
+
+            if (!BuildWebGL())
+            {
+                throw new Exception(
+                    "WebGL build failed.");
             }
 
 
@@ -663,8 +783,38 @@ public class BuildAllWindow : EditorWindow
         }
         finally
         {
+            // Linux Serverビルドでサブターゲットが「Server」のまま残ると、
+            // エディタのPlay時にMirrorがヘッドレス(サーバー)と判定し、
+            // 自動でサーバーとして起動してしまう。
+            // ビルドの成否に関わらず、必ずPlayerに戻す。
+            ResetStandaloneSubtarget();
+
             EditorUtility.ClearProgressBar();
         }
+    }
+
+
+    // ============================================================
+    // Reset Subtarget
+    // ============================================================
+
+    private static void ResetStandaloneSubtarget()
+    {
+        if (EditorUserBuildSettings
+                .standaloneBuildSubtarget ==
+            StandaloneBuildSubtarget.Player)
+        {
+            return;
+        }
+
+
+        EditorUserBuildSettings
+            .standaloneBuildSubtarget =
+            StandaloneBuildSubtarget.Player;
+
+
+        Debug.Log(
+            "Standalone Build Subtarget reset to Player.");
     }
 
 

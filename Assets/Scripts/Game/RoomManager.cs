@@ -90,13 +90,14 @@ public class RoomManager : NetworkBehaviour
     }
 
     [Command(requiresAuthority = false)]
-    public void CmdUpdateSettings(string roomId, int cardCount, int scoringMode, int maxPlayers, NetworkConnectionToClient sender = null)
+    // roundTimeLimit: 選択時間(秒)。0は無制限。
+    public void CmdUpdateSettings(string roomId, int cardCount, int scoringMode, int maxPlayers, int roundTimeLimit, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.TryGetValue(roomId, out var info)) return;
         if (sender != info.room.hostConnection) return; // ホストのみ変更可能
         if (info.room.gameManager.inProgress) return; // ゲーム中は変更不可
 
-        info.room.gameManager.UpdateSettings(cardCount, scoringMode, maxPlayers);
+        info.room.gameManager.UpdateSettings(cardCount, scoringMode, maxPlayers, roundTimeLimit);
     }
 
     [ClientCallback]

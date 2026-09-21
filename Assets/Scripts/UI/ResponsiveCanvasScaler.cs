@@ -412,9 +412,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         var canvasSize = GetActualCanvasSize();
         // 横持ちは項目を2列に並べるが、それでも縦に5段(Title/CardCount/MaxPlayers/
         // ScoringMode/ボタン)必要なため、620では下部ボタンが30pxはみ出していた。
+        // 選択時間(スライダー)の行を追加した分だけ高さを増やしている。
         Vector2 panelSize = portrait
-            ? new Vector2(Mathf.Min(900f, canvasSize.x * 0.92f), Mathf.Min(1150f, canvasSize.y * 0.62f))
-            : new Vector2(Mathf.Min(1000f, canvasSize.x * 0.7f), Mathf.Min(720f, canvasSize.y * 0.85f));
+            ? new Vector2(Mathf.Min(900f, canvasSize.x * 0.92f), Mathf.Min(1260f, canvasSize.y * 0.72f))
+            : new Vector2(Mathf.Min(1000f, canvasSize.x * 0.7f), Mathf.Min(820f, canvasSize.y * 0.92f));
         panelRt.anchorMin = new Vector2(0.5f, 0.5f);
         panelRt.anchorMax = new Vector2(0.5f, 0.5f);
         panelRt.pivot = new Vector2(0.5f, 0.5f);
@@ -438,6 +439,10 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             y -= rowH + 10f;
             SetRect(panel, "MaxPlayersInput", new Vector2(0f, y), new Vector2(w * 0.5f, rowH));
             y -= rowH + 40f;
+            SetRect(panel, "TimeLimitLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
+            y -= rowH + 10f;
+            SetRect(panel, "TimeLimitSlider", new Vector2(0f, y), new Vector2(w * 0.8f, rowH * 0.5f));
+            y -= rowH + 40f;
             SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.86f, rowH));
             y -= rowH + 10f;
             SetRect(panel, "BtnScoringFixed", new Vector2(-w * 0.22f, y), new Vector2(w * 0.4f, rowH));
@@ -457,6 +462,9 @@ public class ResponsiveCanvasScaler : MonoBehaviour
             y -= rowH + 20f;
             SetRect(panel, "MaxPlayersLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
             SetRect(panel, "MaxPlayersInput", new Vector2(w * 0.25f, y), new Vector2(w * 0.24f, rowH));
+            y -= rowH + 20f;
+            SetRect(panel, "TimeLimitLabel", new Vector2(-w * 0.2f, y), new Vector2(w * 0.42f, rowH));
+            SetRect(panel, "TimeLimitSlider", new Vector2(w * 0.25f, y), new Vector2(w * 0.4f, rowH * 0.5f));
             y -= rowH + 30f;
             SetRect(panel, "ScoringModeLabel", new Vector2(0f, y), new Vector2(w * 0.9f, rowH));
             y -= rowH + 15f;
@@ -470,8 +478,32 @@ public class ResponsiveCanvasScaler : MonoBehaviour
         // フォントは基準解像度に合わせて統一する。
         // シーン上に14や26といった小さい固定値が残っており、画面が大きくても拡大されなかった。
         SetFontRange(panel, "Title", 20f, 64f);
-        foreach (var n in new[] { "CardCountLabel", "MaxPlayersLabel", "ScoringModeLabel" })
+        foreach (var n in new[] { "CardCountLabel", "MaxPlayersLabel", "TimeLimitLabel", "ScoringModeLabel" })
             SetFontRange(panel, n, 16f, 44f);
+
+        // スライダーのつまみは高さに合わせた正方形にし、つまみが端で枠からはみ出さないよう余白を取る。
+        // (標準部品のままだと、つまみの幅が20px固定で大きな画面では小さすぎる)
+        var sliderRt = panel.Find("TimeLimitSlider") as RectTransform;
+        if (sliderRt != null)
+        {
+            float knob = sliderRt.sizeDelta.y;
+            var slideArea = sliderRt.Find("Handle Slide Area") as RectTransform;
+            if (slideArea != null)
+            {
+                slideArea.offsetMin = new Vector2(knob * 0.5f, slideArea.offsetMin.y);
+                slideArea.offsetMax = new Vector2(-knob * 0.5f, slideArea.offsetMax.y);
+                var handle = slideArea.Find("Handle") as RectTransform;
+                if (handle != null) handle.sizeDelta = new Vector2(knob, handle.sizeDelta.y);
+            }
+            var fillArea = sliderRt.Find("Fill Area") as RectTransform;
+            if (fillArea != null)
+            {
+                fillArea.offsetMin = new Vector2(knob * 0.5f, fillArea.offsetMin.y);
+                fillArea.offsetMax = new Vector2(-knob * 0.5f, fillArea.offsetMax.y);
+                var fillRt = fillArea.Find("Fill") as RectTransform;
+                if (fillRt != null) fillRt.sizeDelta = new Vector2(0f, fillRt.sizeDelta.y);
+            }
+        }
         foreach (var n in new[] { "CardCountInput", "MaxPlayersInput" })
             SetFontRange(panel, n, 16f, 44f);
         foreach (var n in new[] { "BtnScoringFixed", "BtnScoringSum", "BtnApplySettings", "BtnCloseSettings" })
