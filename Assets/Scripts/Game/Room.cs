@@ -27,6 +27,22 @@ public class Room
     public void AddPlayer(NetworkConnectionToClient player)
     {
         var playerCom = player.identity.GetComponent<Player>();
+
+        // ゲーム中に抜けた場合、集計のためplayerComponentsには残している。
+        // そのまま再入室すると同じPlayerが二重に登録され、
+        // 一覧に「幻影」として現れてしまう。古いエントリを先に外す。
+        if (playerComponents.Contains(playerCom))
+        {
+            // データ削除はインデックスを使うので、リストから外す前に呼ぶ
+            if (gameManager != null) gameManager.RemovePlayerData(playerCom);
+            playerComponents.Remove(playerCom);
+            // 残りのプレイヤーのIDを詰め直す
+            for (int i = 0; i < playerComponents.Count; i++)
+                if (playerComponents[i] != null) playerComponents[i].playerId = i;
+        }
+        playerCom.hasLeft = false;
+        playerCom.pendingSelection = -1;
+
         int id = playerComponents.Count;
         playerCom.Setup(this, id);
         playerCom.gameManager = gameManager;

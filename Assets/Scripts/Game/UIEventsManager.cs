@@ -1114,6 +1114,19 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
 
         if (kb.rKey.wasPressedThisFrame) ButtonReady();
         if (kb.cKey.wasPressedThisFrame) ButtonConfirmCard();
+        if (kb.hKey.wasPressedThisFrame) ButtonToggleHistory();
+
+        // Spaceは状況に応じて使い分ける。
+        // 実際に押せるボタンが出ているときだけ反応させる。
+        if (kb.spaceKey.wasPressedThisFrame)
+        {
+            if (nextRoundButtonGO != null && nextRoundButtonGO.activeInHierarchy)
+                ButtonNextRound();
+            else if (confirmButtonGO != null && confirmButtonGO.activeInHierarchy)
+                ButtonConfirmCard();
+            else
+                ButtonStartGame();
+        }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         if (kb.leftArrowKey.wasPressedThisFrame) OnClickDebugPrevPlayer();

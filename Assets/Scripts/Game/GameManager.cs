@@ -157,6 +157,26 @@ public class GameManager : NetworkBehaviour
         }
     }
 
+    // 再入室時に、古いプレイヤー分のデータを取り除く。
+    // これをしないと、抜けた人の枠が残ったまま新しい枠が足され、
+    // 一覧に存在しないプレイヤーが表示されてしまう。
+    [Server]
+    public void RemovePlayerData(Player pl)
+    {
+        if (room == null || pl == null) return;
+        int idx = room.playerComponents.IndexOf(pl);
+        if (idx < 0) return;
+
+        for (int c = CARDCOUNT - 1; c >= 0; c--)
+        {
+            int flat = idx * CARDCOUNT + c;
+            if (flat < used_Players.Count) used_Players.RemoveAt(flat);
+        }
+        if (idx < turncards.Count) turncards.RemoveAt(idx);
+        if (idx < roundWins.Count) roundWins.RemoveAt(idx);
+        if (idx < lastRevealedPicks.Count) lastRevealedPicks.RemoveAt(idx);
+    }
+
     [Server]
     public void AddPlayer()
     {
