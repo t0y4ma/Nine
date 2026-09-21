@@ -118,7 +118,8 @@ public override void OnServerDisconnect(NetworkConnectionToClient conn)
         if (playerCon != null)
         {
             var room = playerCon.room;
-            if (room != null) room.RemovePlayer(conn);
+            // 切断済みなので本人への通知は送らない。ゲーム中なら席は空席として残る。
+            if (room != null) room.RemovePlayer(conn, false);
         }
         base.OnServerDisconnect(conn);
     }

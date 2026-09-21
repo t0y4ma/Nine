@@ -12,9 +12,11 @@ public class Player : NetworkBehaviour
     // 読めてしまうため、TargetRpcで所有者だけに送る。
     /*[HideInInspector]*/ public string myRoomId = "";
 
-    // 退出した本人をロビー(部屋選択画面)に戻す。
-    // ゲーム中に抜けた場合、集計のためオブジェクト自体は
-    // 部屋に残るので、UIだけを切り替える必要がある。
+    // 部屋に戻ってきたとき、どの席の持ち主かを見分けるための識別子。
+    // ブラウザごとに1つ作って保存しておき、Join時に送ってもらう。
+    // 他人の席を奪えてしまわないよう、サーバー内だけで持つ(SyncVarにしない)。
+    [HideInInspector] public string clientToken = "";
+
     // 時間切れ時の自動提出で使う「選択中のカード」。
     // 確定はしていないが選んではいる状態をサーバーに伝えておき、
     // タイムアウト時にランダムではなくこのカードを出す。
@@ -52,6 +54,8 @@ public class Player : NetworkBehaviour
     }
 #endif
 
+    // 退出した本人を部屋選択画面に戻す。
+    // inRoomの同期だけでは、ゲーム中に抜けた場合に盤面が残ることがあるため、明示的に切り替える。
     [TargetRpc]
     public void TargetLeftRoom(NetworkConnection target)
     {
@@ -65,9 +69,6 @@ public class Player : NetworkBehaviour
     {
         myRoomId = roomId;
     }
-
-    // ゲームから抜けたプレイヤー。以降のラウンドでは常に0を出す扱いにする。
-    [SyncVar] public bool hasLeft = false;
 
     [SyncVar]
     public string playerName;
@@ -110,6 +111,10 @@ public class Player : NetworkBehaviour
         this.room = room;
         this.playerId = playerId;
         int cardCnt = room.gameManager.CARDCOUNT;
+        // 前に入っていた部屋の手札が残っていると、Addで後ろに継ぎ足されて枚数が増えてしまう。
+        // 毎回作り直す。
+        cards.Clear();
+        used.Clear();
         for (int i = 1; i <= cardCnt; i++) { cards.Add(i); used.Add(false); }
         inRoom = true;
     }

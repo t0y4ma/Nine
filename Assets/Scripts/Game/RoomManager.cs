@@ -27,13 +27,14 @@ public class RoomManager : NetworkBehaviour
     public Dictionary<string, RoomInfo> roomDict = new();
     public readonly SyncDictionary<string, string> roomNames = new();
 
+    // clientToken: ブラウザごとの識別子。ゲーム中に抜けた人が、自分の席に戻るために使う。
     [Command(requiresAuthority = false)]
-    public void CmdJoinRoom(string roomId, string password, NetworkConnectionToClient sender = null)
+    public void CmdJoinRoom(string roomId, string password, string clientToken, NetworkConnectionToClient sender = null)
     {
         if (!roomDict.ContainsKey(roomId)) return;
         if (password == "") password = "****";
-        Debug.Log("Join to the room with id of " + roomId + ", password of " + password);
-        roomDict[roomId].room.JoinRoom(sender, password);
+        Debug.Log("Join to the room with id of " + roomId);
+        roomDict[roomId].room.JoinRoom(sender, password, clientToken);
     }
 
     [Command(requiresAuthority = false)]
@@ -84,7 +85,8 @@ public class RoomManager : NetworkBehaviour
         // 退出者がホストだった場合、部屋を作成したクライアントが誰もいなくなるが、
         // Room.RemovePlayerは残り0人になった時点で自動的に部屋自体を削除するため、
         // 残ったメンバーがいる場合の「ホスト権限の引き継ぎ」は別途今後の課題とする。
-        info.room.RemovePlayer(sender);
+        // (ゲーム中に抜けたホストが戻ってきた場合は、ホスト権限も戻る)
+        info.room.RemovePlayer(sender, true);
     }
 
     [Command(requiresAuthority = false)]

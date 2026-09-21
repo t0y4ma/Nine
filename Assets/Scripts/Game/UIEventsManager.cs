@@ -480,6 +480,13 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (pwField != null) pwField.gameObject.SetActive(!inRoom);
 
         if (lobbyPanel != null) lobbyPanel.SetActive(inRoom && !inGame);
+        // 部屋を抜けるとGameBoardごと非表示にしているので、ゲームに(戻って)入ったら表示し直す。
+        // これが無いと、一度Leaveした後はゲームが始まっても盤面が出なかった。
+        if (inGame)
+        {
+            var boardTf = GameObject.Find("Canvas")?.transform.Find("GameBoard");
+            if (boardTf != null && !boardTf.gameObject.activeSelf) boardTf.gameObject.SetActive(true);
+        }
         if (myCardParent != null) myCardParent.SetActive(inGame);
         if (othersCardParent != null) othersCardParent.SetActive(inGame);
         if (othersLabelsParent != null) othersLabelsParent.SetActive(inGame); // 以前ここが漏れており、空でも常時アクティブなプレースホルダー矩形がロビーのUIと重なっていた
@@ -611,7 +618,22 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     public void ButtonJoinRoom()
     {
         string txt = inputField.text;
-        roomManager.CmdJoinRoom(txt, GetRoomPassword(), connectionToClient);
+        roomManager.CmdJoinRoom(txt, GetRoomPassword(), GetClientToken());
+    }
+
+    // このブラウザ(端末)の識別子。ゲーム中に抜けた後、同じ部屋にJoinすると
+    // この値で元の席を見つけて戻れる。再読み込みしても変わらないよう保存しておく。
+    private const string CLIENT_TOKEN_KEY = "Nine.ClientToken";
+    private static string GetClientToken()
+    {
+        string token = PlayerPrefs.GetString(CLIENT_TOKEN_KEY, "");
+        if (string.IsNullOrEmpty(token))
+        {
+            token = System.Guid.NewGuid().ToString("N");
+            PlayerPrefs.SetString(CLIENT_TOKEN_KEY, token);
+            PlayerPrefs.Save();
+        }
+        return token;
     }
 
     public void ButtonStartGame()
@@ -1175,6 +1197,13 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         // 画面サイズが変わっていたらカードサイズを再計算する
         RequeueCardFitIfResized();
 
+        ApplyPendingCardFits();
+    }
+
+    // 予約されているカードサイズの計算を、今の領域の大きさで適用する。
+    // 大きさがまだ確定していない項目は予約を残し、次のフレームで再挑戦する。
+    private void ApplyPendingCardFits()
+    {
         // 「今出したカード」: 帯の実サイズからカードサイズを決める
         if (_pendingPlayedFit > 0 && playedCardsParent != null)
         {
@@ -1317,6 +1346,78 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             if (FitCardsInRow(row, count, 8f, w, h))
                 _pendingCardFit.RemoveAt(idx);
         }
+    }
+
+    // ===== ゲーム開始時のレイアウト組み直し =====
+    // 盤面は画面サイズに合わせて計算しているが、作った直後は親の大きさがまだ確定しておらず、
+    // 何か再計算のきっかけ(Confirm等)が起きるまで表示範囲から見切れていることがあった。
+    // ゲーム開始時(と途中復帰時)に、全LayoutGroupを正しい順で組み直す。
+    private Coroutine _fullRebuildRoutine;
+
+    public void RequestFullLayoutRebuild()
+    {
+        if (!isActiveAndEnabled) return;
+        if (_fullRebuildRoutine != null) StopCoroutine(_fullRebuildRoutine);
+        _fullRebuildRoutine = StartCoroutine(FullLayoutRebuildRoutine());
+    }
+
+    private System.Collections.IEnumerator FullLayoutRebuildRoutine()
+    {
+        // 盤面の表示切り替え(SetActive)や画面サイズの変化が
+        // RectTransformに反映されるのを1フレーム待つ
+        yield return null;
+        ForceRebuildAllLayouts();
+        _fullRebuildRoutine = null;
+    }
+
+    public void ForceRebuildAllLayouts()
+    {
+        var canvasRt = GetCanvasRect();
+        if (canvasRt == null) return;
+
+        // 1. 保留中のCanvas更新を先に済ませ、今の画面サイズを確定させる
+        Canvas.ForceUpdateCanvases();
+
+        // 2. 盤面の各帯(一覧/今出したカード/ボタン/手札)の高さ配分を、今の画面サイズで適用し直す
+        var scaler = canvasRt.GetComponent<ResponsiveCanvasScaler>();
+        if (scaler == null && othersCardParent != null)
+            scaler = othersCardParent.GetComponentInParent<ResponsiveCanvasScaler>();
+        if (scaler != null) scaler.ReapplyBoardSlots();
+
+        // 3. 全LayoutGroupを親→子の順で組み直し、各領域の実際の大きさを確定させる
+        RebuildLayoutGroupsParentFirst(canvasRt);
+
+        // 4. 確定した領域の大きさから、カードの大きさを計算し直す
+        //    (画面サイズが変わったものとして、全カード列を予約し直す)
+        _lastLayoutSize = Vector2.zero;
+        RequeueCardFitIfResized();
+        ApplyPendingCardFits();
+
+        // 5. カードの大きさが変わったので、もう一度親→子の順で組み直して並びを確定させる
+        RebuildLayoutGroupsParentFirst(canvasRt);
+    }
+
+    // 全LayoutGroupを親→子の順にForceRebuildする。
+    // LayoutGroupは「親が決めた自分の大きさ」の中に子を並べるので、親が先に確定している必要がある。
+    // また、ForceRebuildLayoutImmediateは、Layoutを持たない要素を途中に挟んだ先の
+    // LayoutGroupまでは辿らないため、1つずつ明示的に組み直す。
+    private static void RebuildLayoutGroupsParentFirst(RectTransform root)
+    {
+        var groups = root.GetComponentsInChildren<LayoutGroup>(false);
+        // 浅いものから順に(同じ深さの中では階層の並び順のまま)処理する
+        var ordered = groups.OrderBy(g => HierarchyDepth(g.transform, root)).ToList();
+        foreach (var g in ordered)
+        {
+            if (g == null || !g.isActiveAndEnabled) continue;
+            LayoutRebuilder.ForceRebuildLayoutImmediate((RectTransform)g.transform);
+        }
+    }
+
+    private static int HierarchyDepth(Transform t, Transform root)
+    {
+        int d = 0;
+        while (t != null && t != root) { d++; t = t.parent; }
+        return d;
     }
 
     // その列のカードが既に適切なサイズを持っているか
@@ -2076,8 +2177,8 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
     }
 
     // 「本当に抜けますか?」の確認ダイアログ。
-    // ゲーム中に抜けるとドロップアウト扱いになるため、
-    // 誤操作を防ぐワンクッションを入れる。
+    // 抜けている間のラウンドはランダムにカードが出されるため、誤操作を防ぐワンクッションを入れる。
+    // (同じ部屋にJoinし直せば、自分の席に戻って続きから遊べる)
     private GameObject _leaveConfirm;
 
     private void ShowLeaveConfirm()
@@ -2121,7 +2222,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
             msgRt.offsetMin = Vector2.zero;
             msgRt.offsetMax = Vector2.zero;
             var t = msgGo.AddComponent<TextMeshProUGUI>();
-            t.text = "Leave this game? \n You can't rejoin this game.";
+            t.text = "Leave this game?\nWhile you're away, a random card is played for you each round.\nJoin this room again to return to your seat.";
             t.enableAutoSizing = true;
             t.fontSizeMin = 1; t.fontSizeMax = 300;
             t.alignment = TextAlignmentOptions.Center;
@@ -2188,7 +2289,7 @@ return _canvasRt != null ? _canvasRt.rect.width : 1920f;
         if (localPlayer == null) return;
 
         // ゲーム中は誤操作で抜けないよう確認する。
-        // (抜けるとドロップアウト扱いになり、以降のラウンドに戻れない)
+        // (抜けている間はランダムに提出される。同じ部屋にJoinし直せば席に戻れる)
         var gmForCheck = localPlayer.gameManager;
         if (gmForCheck != null && gmForCheck.inProgress)
         {
@@ -2695,7 +2796,8 @@ float maxPanelWidth = canvasWidthForResults * 0.6f;
         var localPlayer = NetworkClient.connection?.identity?.GetComponent<Player>();
         if (localPlayer == null || localPlayer.room == null) return;
 
-        var list = localPlayer.room.playerComponents;
+        // 空席(null)は操作対象にできないので除外する
+        var list = localPlayer.room.playerComponents.Where(p => p != null).ToList();
         if (list.Count == 0) return;
 
         int currentIndex = debugTargetPlayer != null ? list.IndexOf(debugTargetPlayer) : -1;

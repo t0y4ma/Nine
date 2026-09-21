@@ -63,6 +63,19 @@ public class GameManager : NetworkBehaviour
         // 表示が空のままになるため、既存分をここで反映する。
         for (int i = 0; i < roundHistoryLog.Count; i++)
             OnRoundHistoryChanged(SyncList<string>.Operation.OP_ADD, i, null, roundHistoryLog[i]);
+
+        // ゲーム中の部屋に戻ってきた場合、このオブジェクトが届くのは入室より後になる。
+        // その時点ではまだ「ゲーム中」と判定できずロビー表示になっているので、ここで画面を合わせ直す。
+        var ui = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        if (ui != null)
+        {
+            ui.RefreshLobbyPanels();
+            if (inProgress)
+            {
+                ui.RefreshBoardViews();
+                ui.RequestFullLayoutRebuild();
+            }
+        }
     }
 
     public override void OnStopClient()
@@ -125,6 +138,7 @@ public class GameManager : NetworkBehaviour
     public void UpdateSettings(int newCardCount, int newScoringMode, int newMaxPlayers)
     {
         if (inProgress) return;
+        if (room != null) room.RemoveEmptySeats();
         newCardCount = Mathf.Clamp(newCardCount, 3, CARD_COUNT_LIMIT);
         newScoringMode = Mathf.Clamp(newScoringMode, 0, 1);
         // 上限は、既に参加している人数を下回らないようにする(既存プレイヤーが弾き出されないため)
@@ -145,6 +159,7 @@ public class GameManager : NetworkBehaviour
 
         foreach (var p in room.playerComponents)
         {
+            if (p == null) continue;
             p.used.Clear();
             for (int c = 0; c < CARDCOUNT; c++) p.used.Add(false);
 
@@ -157,14 +172,12 @@ public class GameManager : NetworkBehaviour
         }
     }
 
-    // 再入室時に、古いプレイヤー分のデータを取り除く。
+    // 席を取り除くときに、その席のデータも取り除く。
     // これをしないと、抜けた人の枠が残ったまま新しい枠が足され、
     // 一覧に存在しないプレイヤーが表示されてしまう。
     [Server]
-    public void RemovePlayerData(Player pl)
+    public void RemovePlayerData(int idx)
     {
-        if (room == null || pl == null) return;
-        int idx = room.playerComponents.IndexOf(pl);
         if (idx < 0) return;
 
         for (int c = CARDCOUNT - 1; c >= 0; c--)
@@ -175,6 +188,45 @@ public class GameManager : NetworkBehaviour
         if (idx < turncards.Count) turncards.RemoveAt(idx);
         if (idx < roundWins.Count) roundWins.RemoveAt(idx);
         if (idx < lastRevealedPicks.Count) lastRevealedPicks.RemoveAt(idx);
+    }
+
+    // 空席に本人が戻ってきたとき、手札の使用状況を記録から復元する。
+    // 空席だった間のカードも(ランダム提出で)公開済みの記録に残っているので、それを使う。
+    // 抜ける前にこのラウンドのカードを確定していた場合は、その確定も引き継ぐ。
+    [Server]
+    public void RestoreSeat(int idx)
+    {
+        if (room == null || idx < 0 || idx >= room.playerComponents.Count) return;
+        var pl = room.playerComponents[idx];
+        if (pl == null) return;
+
+        for (int c = 0; c < CARDCOUNT && c < pl.used.Count; c++)
+        {
+            int flat = idx * CARDCOUNT + c;
+            pl.used[c] = flat < used_Players.Count && used_Players[flat];
+        }
+
+        int confirmed = idx < turncards.Count ? turncards[idx] - 1 : -1;
+        if (confirmed >= 0 && confirmed < pl.used.Count)
+        {
+            pl.used[confirmed] = true;
+            pl.isReadytoTurn = true;
+        }
+        RpcRefreshBoard();
+    }
+
+    // 空席を除いた全員が条件を満たしているか。
+    // 空席を含めると、抜けた人は二度と確定もNextもしないので、判定が永遠に成立しなくなる。
+    private bool AllPresent(System.Func<Player, bool> condition)
+    {
+        bool any = false;
+        foreach (var p in room.playerComponents)
+        {
+            if (p == null) continue;
+            any = true;
+            if (!condition(p)) return false;
+        }
+        return any;
     }
 
     [Server]
@@ -189,6 +241,8 @@ public class GameManager : NetworkBehaviour
     [Server]
     public void StartGame()
     {
+        // 前のゲームで抜けたまま戻らなかった人の空席を片付けてから始める
+        room.RemoveEmptySeats();
         inProgress = true;
         for (int i = 0; i < used_Players.Count; i++) used_Players[i] = false;
         for (int i = 0; i < turncards.Count; i++) turncards[i] = 0;
@@ -199,6 +253,7 @@ public class GameManager : NetworkBehaviour
 
         foreach (var playerCom in room.playerComponents)
         {
+            if (playerCom == null) continue;
             playerCom.isReadytoTurn = false;
             playerCom.isReadyToStart = false;
             playerCom.pendingSelection = -1;
@@ -269,6 +324,9 @@ public class GameManager : NetworkBehaviour
     {
         var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
         uiManager?.ShowRoundCutIn(roundNumber, totalRounds);
+        // ゲーム開始時は盤面を作った直後なので、画面サイズに合わせてレイアウトを組み直す。
+        // (StartGameの盤面更新Rpcの後に届くので、この時点でカードは揃っている)
+        if (roundNumber == 1) uiManager?.RequestFullLayoutRebuild();
         // 新ラウンドが始まったら前ラウンドの結果表示は消す
         uiManager?.HideRoundResultPopup();
         // 前ラウンドの結果表示が残り続けないよう、新しいラウンドの開始時にクリアする
@@ -286,7 +344,7 @@ public class GameManager : NetworkBehaviour
 
         while (remaining > 0f)
         {
-            if (room.playerComponents.Count > 0 && room.playerComponents.All(p => p.isReadytoTurn))
+            if (AllPresent(p => p.isReadytoTurn))
             {
                 remaining = Mathf.Min(remaining, ROUND_TIME_CHMIN);
             }
@@ -333,13 +391,13 @@ public class GameManager : NetworkBehaviour
         RpcRoundTransitionProgress(1f); // バーを満タン状態で表示開始
 
         // 次ラウンドへの遷移: 全員がNextを押すか、最大待機時間が経過するまで待つ
-        foreach (var p in room.playerComponents) p.isReadyForNextRound = false;
+        foreach (var p in room.playerComponents) if (p != null) p.isReadyForNextRound = false;
 
         float elapsed = 0f;
         float lastSent = -1f;
         while (elapsed < ROUND_TRANSITION_DELAY)
         {
-            if (room.playerComponents.Count > 0 && room.playerComponents.All(p => p.isReadyForNextRound))
+            if (AllPresent(p => p.isReadyForNextRound))
                 break;
 
             yield return null;
@@ -370,6 +428,9 @@ public class GameManager : NetworkBehaviour
 
         foreach (var playerCom in room.playerComponents)
         {
+            // 以前は抜けた人もここでfalseに戻していたため、次のラウンド以降
+            // 「全員確定」「全員Next」が成立せず、毎回制限時間いっぱい待たされていた。
+            if (playerCom == null) continue;
             playerCom.isReadytoTurn = false;
             playerCom.isReadyForNextRound = false;
         }
@@ -398,11 +459,8 @@ public class GameManager : NetworkBehaviour
         {
             if (playedCards[i] != 0) continue;
 
-            // 抜けたプレイヤーは自動選択の対象外。常に0(未提出)のままにする。
-            if (room != null && i < room.playerComponents.Count
-                && room.playerComponents[i] != null && room.playerComponents[i].hasLeft)
-                continue;
-
+            // 空席(抜けたプレイヤー)も、時間切れの人と同じく未使用カードからランダムに出す。
+            // 空席にはPlayerが無いので、手札の状態は公開済みの記録(used_Players)で判断する。
             // 確定はしていないが選択中のカードがあれば、それを出す。
             // (ランダムより本人の意図に近い)
             var selPl = (room != null && i < room.playerComponents.Count) ? room.playerComponents[i] : null;
@@ -421,6 +479,7 @@ public class GameManager : NetworkBehaviour
                 // used_Playersは公開時にしか更新しないので、
                 // 自分の手札(Player.used)を基準に未使用カードを選ぶ
                 bool alreadyUsed = (room != null && i < room.playerComponents.Count
+                    && room.playerComponents[i] != null
                     && c < room.playerComponents[i].used.Count)
                     ? room.playerComponents[i].used[c]
                     : used_Players[i * CARDCOUNT + c];
@@ -435,7 +494,7 @@ public class GameManager : NetworkBehaviour
             if (i < room.playerComponents.Count)
             {
                 var p = room.playerComponents[i];
-                if (chosen < p.used.Count) p.used[chosen] = true;
+                if (p != null && chosen < p.used.Count) p.used[chosen] = true;   // 空席なら記録側だけ
             }
         }
 
@@ -578,6 +637,7 @@ public class GameManager : NetworkBehaviour
         // これらは次のゲーム開始時にStartGame()が確実にリセットする。
         foreach (var p in room.playerComponents)
         {
+            if (p == null) continue;
             p.isReadyToStart = false;
             p.isReadytoTurn = false;
             p.isReadyForNextRound = false;
@@ -588,7 +648,8 @@ public class GameManager : NetworkBehaviour
         var scoreSb = new System.Text.StringBuilder();
         for (int i = 0; i < finalScores.Count; i++)
         {
-            string pname = (i < room.playerComponents.Count && !string.IsNullOrEmpty(room.playerComponents[i].playerName))
+            string pname = (i < room.playerComponents.Count && room.playerComponents[i] != null
+                            && !string.IsNullOrEmpty(room.playerComponents[i].playerName))
                 ? room.playerComponents[i].playerName
                 : ("Player " + i);
             scoreSb.AppendLine(pname + ": " + finalScores[i] + " pt");
@@ -617,9 +678,9 @@ public class GameManager : NetworkBehaviour
         if (room == null) return;
 
         int ready = 0;
-        foreach (var p in room.playerComponents) if (p.isReadyToStart) ready++;
+        foreach (var p in room.playerComponents) if (p != null && p.isReadyToStart) ready++;
         readyCount = ready;
-        totalPlayerCount = room.playerComponents.Count;
+        totalPlayerCount = room.PresentCount;
     }
 
     private void OnLobbyStatusChanged(int oldVal, int newVal)
