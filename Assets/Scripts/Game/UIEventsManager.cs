@@ -109,6 +109,13 @@ public partial class UIEventsManager : MonoBehaviour
     void Awake()
     {
         _current = this;
+        // 専用サーバー(画面なし)では画面を作らない。
+        // 作ると毎フレームの描き直しでCPUを使い、フォントも使えないので文字化けの警告がログに大量に出る。
+        if (Application.isBatchMode || SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+        {
+            enabled = false;
+            return;
+        }
         NineUi.Font = font != null ? font : TMP_Settings.defaultFontAsset;
         BuildUi();
     }
