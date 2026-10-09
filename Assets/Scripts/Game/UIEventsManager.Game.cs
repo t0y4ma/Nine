@@ -39,6 +39,7 @@ public partial class UIEventsManager
         public float handLift;
         public int builtSeats = -1, builtCards = -1;
         public bool pointShown;
+        public bool slotTwoLine;   // 場の名前を「P1」と名前の2行に分けるか(席の幅が狭いとき)
     }
     GameView game = new GameView();
 
@@ -60,7 +61,8 @@ public partial class UIEventsManager
         NineUi.Stretch(g.timerFill.rectTransform);
         g.timerFill.type = Image.Type.Filled;
         g.timerFill.fillMethod = Image.FillMethod.Horizontal;
-        g.timerFill.sprite = NineUi.Rounded;
+        // 角丸の画像を横に引き伸ばすと端が細く尖るので、残り時間バーは素の四角で描く
+        g.timerFill.sprite = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, 4, 4), new Vector2(0.5f, 0.5f), 100);   // 塗りつぶし(Filled)には画像が要る
 
         // 席の一覧
         g.seats = NineUi.Rect("Seats", g.root);
@@ -127,6 +129,9 @@ public partial class UIEventsManager
             sl.rt = NineUi.Rect("Slot" + seat, g.table);
             sl.card = NineCard.Create("Card", sl.rt, withTag: true, withStripe: true);
             sl.label = NineUi.Text("Label", sl.rt, "", NineTheme.SizeSmall, NineTheme.Muted, TextAlignmentOptions.Center, true);
+            // 名前が長いと隣の席の名前に重なるので、枠の幅で切って「…」にする
+            sl.label.overflowMode = TextOverflowModes.Ellipsis;
+            sl.label.margin = new Vector4(6, 0, 6, 0);   // 隣の名前と間を空ける
             g.slots.Add(sl);
         }
         g.builtSeats = n;
@@ -264,7 +269,7 @@ public partial class UIEventsManager
             else c.SetTag("", NineTheme.Gold);
             c.SetStripe(NineTheme.SeatColor(seat));
             string col = NineTheme.ToHex(NineTheme.SeatColor(seat));
-            sl.label.text = "<color=" + col + ">" + SeatTag(seat) + "</color> " + NameOf(p, seat);
+            sl.label.text = "<color=" + col + ">" + SeatTag(seat) + "</color>" + (g.slotTwoLine ? "\n" : " ") + NameOf(p, seat);
             sl.label.color = p == viewer ? NineTheme.Text : NineTheme.Muted;
         }
 
@@ -437,6 +442,10 @@ public partial class UIEventsManager
         float pad = Mathf.Clamp(th * 0.08f, 12, 26);
         NineUi.TL(g.tableCaption.rectTransform, 22, 12, 100, 30);
         float labelH = Mathf.Clamp(th * 0.13f, 24, 40);
+        // 席が多く1席あたりの幅が狭いときは、名前を2行(P1/名前)にして長く出す
+        g.slotTwoLine = n > 0 && (tw - pad * 2) / n < 190f;
+        float lineH = labelH;
+        if (g.slotTwoLine) labelH *= 1.9f;
         float ch = (th - pad * 2 - labelH - 6) / 1.12f;
         float cw = ch / 1.4f;
         float gapS = cw * 0.32f;
@@ -449,6 +458,19 @@ public partial class UIEventsManager
         {
             float k = avail / total;
             cw *= k; ch *= k; gapS *= k; pointW *= k; total = avail;
+        }
+        else
+        {
+            // 横に余裕があるときは席の間を広げ、名前を長く表示できるようにする(カード1枚分まで)。
+            // 得点カードとの仕切りも同じだけ広げ、先頭の席の名前が「山札のこり」に重ならないようにする
+            int gaps = (n - 1) + (pointMode ? 1 : 0);
+            if (gaps > 0)
+            {
+                float add = Mathf.Min((avail - total) / gaps, cw * 1.0f);
+                gapS += add;
+                if (pointMode) sepW += add;
+                total += add * gaps;
+            }
         }
         float x = (tw - total) / 2;
         float cardTop = pad + (th - pad * 2 - (ch * 1.12f + labelH + 6)) / 2 + ch * 0.12f;
@@ -481,7 +503,8 @@ public partial class UIEventsManager
             NineUi.TL(sl.card.Rt, gapS / 2, cardTop, cw, ch);
             sl.card.Layout(cw, ch);
             NineUi.TL(sl.label.rectTransform, 0, cardTop + ch + 6, cw + gapS, labelH);
-            sl.label.fontSize = Mathf.Min(NineTheme.SizeSmall, labelH * 0.66f);
+            sl.label.fontSize = Mathf.Min(NineTheme.SizeSmall, lineH * 0.66f);
+            sl.label.lineSpacing = -12;
         }
     }
 

@@ -588,8 +588,14 @@ public class BuildAllWindow : EditorWindow
         SessionState.EraseBool(
             PendingBuildKey);
 
-        EditorApplication.delayCall += () =>
+        // delayCall はエディタが裏にあるとき呼ばれないことがあったため、update で数フレーム待ってから続ける
+        EditorApplication.CallbackFunction resume = null;
+        int frames = 0;
+        resume = () =>
         {
+            if (++frames < 3) return;
+            EditorApplication.update -= resume;
+
             if (!IsLinuxSysrootReady())
             {
                 Notify(
@@ -608,6 +614,7 @@ public class BuildAllWindow : EditorWindow
 
             window.RunBuildAll();
         };
+        EditorApplication.update += resume;
     }
 
 

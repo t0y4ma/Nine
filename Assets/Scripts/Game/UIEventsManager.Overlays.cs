@@ -246,6 +246,7 @@ public partial class UIEventsManager
         float gap = cardW * 0.35f;
         float total = n * cardW + (n - 1) * gap;
         if (total > areaW) { float k = areaW / total; cardW *= k; cardH *= k; gap *= k; total = areaW; }
+        else if (n > 1) { float add = Mathf.Min((areaW - total) / (n - 1), cardW * 0.8f); gap += add; total += add * (n - 1); }   // 名前を長く出せるよう席の間を広げる
         float x0 = (areaW - total) / 2;
         float top = (areaH - (cardH * 1.12f + labelH + 10)) / 2 + cardH * 0.12f;
         for (int i = 0; i < n; i++)
@@ -268,7 +269,8 @@ public partial class UIEventsManager
             var p = SeatPlayer(i);
             var label = NineUi.Text("Label", slot, "<color=" + NineTheme.ToHex(NineTheme.SeatColor(i)) + ">" + SeatTag(i) + "</color> " + NameOf(p, i), NineTheme.SizeSmall, p != null && p == viewer ? NineTheme.Text : NineTheme.Muted, TextAlignmentOptions.Center, true);
             NineUi.TL(label.rectTransform, 0, top + cardH + 10, cardW + gap, labelH);
-            NineUi.Fit(label, NineTheme.SizeSmall, 10);
+            NineUi.Fit(label, NineTheme.SizeSmall, 14);
+            label.overflowMode = TextOverflowModes.Ellipsis;
         }
     }
 
@@ -361,7 +363,8 @@ public partial class UIEventsManager
             var p = SeatPlayer(i);
             var t = NineUi.Text("Seat" + i, o.histHeader, "<color=" + NineTheme.ToHex(NineTheme.SeatColor(i)) + ">" + SeatTag(i) + "</color> " + NameOf(p, i), NineTheme.SizeSmall, p != null && p == viewer ? NineTheme.Text : NineTheme.Muted, TextAlignmentOptions.Center, true);
             NineUi.TL(t.rectTransform, roundW + i * colW, 0, colW, 44);
-            NineUi.Fit(t, NineTheme.SizeSmall, 10);
+            NineUi.Fit(t, NineTheme.SizeSmall, 14);
+            t.overflowMode = TextOverflowModes.Ellipsis;
         }
         var hres = NineUi.Text("Result", o.histHeader, "結果", NineTheme.SizeSmall, NineTheme.Faint, TextAlignmentOptions.Center, true);
         NineUi.TL(hres.rectTransform, roundW + n * colW, 0, resultW, 44);

@@ -81,6 +81,40 @@ namespace Nine.UI
         }
     }
 
+    /// <summary>
+    /// 角丸の半径を、要素の大きさに合わせて「短辺の半分」までに抑える。
+    /// 大きさが変わるたびに掛け直すので、札(999指定の丸い両端)もスライダーの溝も常に半円の端になる。
+    /// </summary>
+    [DisallowMultipleComponent]
+    public sealed class NineRound : MonoBehaviour
+    {
+        Image img;
+        float radius = 16;
+
+        public void Set(Image image, float r)
+        {
+            img = image;
+            radius = r;
+            Apply();
+        }
+
+        void OnEnable() { Apply(); }
+        void OnRectTransformDimensionsChange() { Apply(); }
+
+        void Apply()
+        {
+            if (img == null) img = GetComponent<Image>();
+            if (img == null) return;
+            var size = ((RectTransform)transform).rect.size;
+            float shortSide = Mathf.Min(size.x, size.y);
+            float r = radius;
+            // 角の部分(境界)は半径より少し大きいので、その分も含めて短辺の半分に収める
+            if (shortSide > 0.5f) r = Mathf.Min(r, shortSide * 0.5f * NineUi.TexRadiusPublic / NineUi.TexBorder);
+            float m = NineUi.TexRadiusPublic / Mathf.Max(0.5f, r);
+            if (!Mathf.Approximately(img.pixelsPerUnitMultiplier, m)) img.pixelsPerUnitMultiplier = m;
+        }
+    }
+
     /// <summary>uGUI の部品をコードで組み立てる小さなヘルパー。</summary>
     public static class NineUi
     {
@@ -177,12 +211,20 @@ namespace Nine.UI
             }
         }
 
-        /// <summary>角丸の半径(キャンバス単位)を設定する。</summary>
+        /// <summary>
+        /// 角丸の半径(キャンバス単位)を設定する。実際の半径は要素の短辺の半分までに抑える(NineRound)。
+        /// 抑えないと、9スライスの角が要素より大きくなったときに左右から押し潰され、端が細長く尖った楕円になる。
+        /// </summary>
         public static void Radius(Image img, float radius)
         {
             img.type = Image.Type.Sliced;
-            img.pixelsPerUnitMultiplier = TexRadius / Mathf.Max(1f, radius);
+            var r = img.GetComponent<NineRound>();
+            if (r == null) r = img.gameObject.AddComponent<NineRound>();
+            r.Set(img, radius);
         }
+
+        internal const float TexRadiusPublic = TexRadius;
+        internal const float TexBorder = TexRadius + 2;
 
         // ================= RectTransform =================
         public static RectTransform Rect(string name, Transform parent)
