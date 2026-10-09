@@ -23,7 +23,36 @@ public class Room
     public string roomId;
 
     // この部屋を作成したクライアントの接続。Start権限はサーバー側ではなくこの接続に紐付く。
+    // 譲渡できるので「作成者」とは限らない。
     public NetworkConnectionToClient hostConnection;
+
+    // 観戦者。席を持たず、ゲームには参加しないが、部屋の一員として盤面を見る。
+    // 席(playerComponents)に入れないのは、席のindexが得点・使用済みカードの並びと対応しているため。
+    // 観戦しているかどうかはPlayer.isSpectatorで表し、人数の数え方や表示はそれに従う。
+    public readonly List<NetworkConnectionToClient> spectators = new();
+
+    public int SpectatorCount => spectators.Count;
+
+    // パスワード付きの部屋か(空のパスワードは内部で"****"として持つ)
+    public bool HasPassword => password != "****";
+
+    // 部屋一覧に出す要約。「参加人数|上限|観戦人数|対局中(0/1)|鍵(0/1)」
+    public string Summary => PresentCount + "|" + gameManager.MaxPlayers + "|" + SpectatorCount + "|"
+        + (gameManager.inProgress ? "1" : "0") + "|" + (HasPassword ? "1" : "0");
+
+    // 部屋にいる全員(席のある人＋観戦者)のPlayer
+    public IEnumerable<Player> AllMembers
+    {
+        get
+        {
+            foreach (var p in playerComponents) if (p != null) yield return p;
+            foreach (var c in spectators)
+            {
+                var p = c.identity != null ? c.identity.GetComponent<Player>() : null;
+                if (p != null) yield return p;
+            }
+        }
+    }
 
     public Room(GameManager gameManager, string password)
     {
@@ -48,6 +77,8 @@ public class Room
     public void AddPlayer(NetworkConnectionToClient player, string token)
     {
         var playerCom = player.identity.GetComponent<Player>();
+        spectators.Remove(player);
+        playerCom.isSpectator = false;
 
         // 同じPlayerが既に席を持っていたら先に外す(二重登録で「幻影」が出るのを防ぐ)
         int existing = playerComponents.IndexOf(playerCom);
@@ -62,6 +93,7 @@ public class Room
         seatTokens.Add(token);
         gameManager.AddPlayer();
         SeatPlayer(player, playerCom, id);
+        NineDebugLog.Add(roomId, "参加: 席" + id + (player == hostConnection ? "(ホスト)" : ""));
         gameManager.RefreshLobbyStatus();
     }
 
@@ -76,8 +108,65 @@ public class Room
         playerCom.isReadytoTurn = false;
         playerCom.isReadyForNextRound = false;
         playerCom.pendingSelection = -1;
+        playerCom.isSpectator = false;
         conn.identity.GetComponent<NetworkMatch>().matchId = matchId;
         if (!players.Contains(conn)) players.Add(conn);
+    }
+
+    // 観戦者として部屋に入れる。席は持たない。
+    [Server]
+    public void AddSpectator(NetworkConnectionToClient conn, string token)
+    {
+        var playerCom = conn.identity != null ? conn.identity.GetComponent<Player>() : null;
+        if (playerCom == null) return;
+
+        int existing = playerComponents.IndexOf(playerCom);
+        if (existing >= 0) RemoveSeatAt(existing);
+
+        playerCom.clientToken = token ?? "";
+        playerCom.room = this;
+        playerCom.gameManager = gameManager;
+        playerCom.playerId = -1;
+        playerCom.isSpectator = true;
+        playerCom.isReadyToStart = false;
+        playerCom.isReadytoTurn = false;
+        playerCom.isReadyForNextRound = false;
+        playerCom.pendingSelection = -1;
+        playerCom.isRoomHost = (conn == hostConnection);
+        playerCom.SetupSpectator(this);
+        conn.identity.GetComponent<NetworkMatch>().matchId = matchId;
+        if (!players.Contains(conn)) players.Add(conn);
+        if (!spectators.Contains(conn)) spectators.Add(conn);
+
+        NineDebugLog.Add(roomId, "観戦で参加");
+        gameManager.RefreshLobbyStatus();
+        // 観戦者は、各プレイヤーが今のラウンドで何を出したかを即座に見られる
+        gameManager.SendSpectatorSnapshot(conn);
+    }
+
+    // 参加/観戦を自分で切り替える。ゲーム中は切り替えられない。
+    // 戻り値: 切り替えに失敗した理由(成功ならnull)
+    [Server]
+    public string SetSpectating(NetworkConnectionToClient conn, bool spectate)
+    {
+        var playerCom = conn.identity != null ? conn.identity.GetComponent<Player>() : null;
+        if (playerCom == null || !players.Contains(conn)) return "この部屋に入っていません。";
+        if (gameManager != null && gameManager.inProgress) return "対局中は参加・観戦を切り替えられません。";
+        if (playerCom.isSpectator == spectate) return null;
+
+        if (spectate)
+        {
+            AddSpectator(conn, playerCom.clientToken);
+            return null;
+        }
+
+        RemoveEmptySeats();
+        // 参加人数の上限は、開始時にホストへ知らせる。ここでは席の総数(ハードリミット)だけ守る。
+        if (playerComponents.Count >= GameManager.MAX_PLAYERS_LIMIT)
+            return "席が埋まっています(最大" + GameManager.MAX_PLAYERS_LIMIT + "人)。";
+
+        AddPlayer(conn, playerCom.clientToken);
+        return null;
     }
 
     // ゲーム中に抜けた本人が戻ってきた場合、元の席に座り直させる。
@@ -94,12 +183,15 @@ public class Room
 
             var playerCom = conn.identity.GetComponent<Player>();
             playerCom.clientToken = token;
-            // 部屋を作った本人なら、接続が変わっていても(再読み込み等)ホスト権限を戻す
-            if (token == hostToken) hostConnection = conn;
+            // 部屋を作った本人が、接続が変わって(再読み込み等)戻ってきた場合だけホスト権限を戻す。
+            // 抜けている間に他の人へ譲られていたら、その人のままにする。
+            if (token == hostToken && (hostConnection == null || !players.Contains(hostConnection)))
+                hostConnection = conn;
 
             playerComponents[i] = playerCom;
             SeatPlayer(conn, playerCom, i);
             gameManager.RestoreSeat(i);
+            NineDebugLog.Add(roomId, "復帰: 席" + i);
             gameManager.RefreshLobbyStatus();
             return true;
         }
@@ -114,8 +206,10 @@ public class Room
     {
         var playerCom = player.identity != null ? player.identity.GetComponent<Player>() : null;
         int idx = playerCom != null ? playerComponents.IndexOf(playerCom) : -1;
+        bool wasHost = (player == hostConnection);
 
         players.Remove(player);
+        spectators.Remove(player);
 
         if (idx >= 0)
         {
@@ -126,6 +220,7 @@ public class Room
                 // このラウンドで確定済みのカードがあれば、それはそのまま出す。
                 // 同じ部屋にJoinし直せば、この席に戻って続きから遊べる。
                 playerComponents[idx] = null;
+                NineDebugLog.Add(roomId, "退出: 席" + idx + "(空席として残す)");
             }
             else
             {
@@ -144,6 +239,7 @@ public class Room
             playerCom.isReadytoTurn = false;
             playerCom.isReadyForNextRound = false;
             playerCom.pendingSelection = -1;
+            playerCom.isSpectator = false;
             playerCom.room = null;
             playerCom.gameManager = null;
             playerCom.myRoomId = "";
@@ -152,10 +248,55 @@ public class Room
             if (notifyClient) playerCom.TargetLeftRoom(player);
         }
 
-        // 接続している人が誰もいなくなったら部屋ごと消す
+        // 接続している人が誰もいなくなったら部屋ごと消す(観戦者だけでも残す)
         if (players.Count == 0) { DeleteRoom(); return; }
+
+        // ホストが抜けたら、残っている人に引き継ぐ
+        if (wasHost) PromoteNewHost();
+
         gameManager.RefreshLobbyStatus();
     }
+
+    // ホスト権限を別の人に渡す。渡す相手は部屋にいる人なら誰でもよい(観戦者も含む)。
+    [Server]
+    public bool TransferHost(Player target)
+    {
+        if (target == null || target.connectionToClient == null) return false;
+        var conn = target.connectionToClient;
+        if (!players.Contains(conn)) return false;
+
+        var old = hostConnection;
+        hostConnection = conn;
+        hostToken = target.clientToken ?? "";
+
+        foreach (var p in AllMembers) p.isRoomHost = (p == target);
+        NineDebugLog.Add(roomId, "ホストを引き継ぎ: " + (target.isSpectator ? "観戦者" : "席" + target.playerId));
+        if (old != null && old.identity != null)
+        {
+            var oldPlayer = old.identity.GetComponent<Player>();
+            if (oldPlayer != null && oldPlayer != target) oldPlayer.isRoomHost = false;
+        }
+        gameManager.RefreshLobbyStatus();
+        return true;
+    }
+
+    // ホストが抜けたときの自動引き継ぎ。席順が早い人を優先し、いなければ観戦者に渡す。
+    [Server]
+    private void PromoteNewHost()
+    {
+        foreach (var p in playerComponents)
+            if (p != null && p.connectionToClient != null) { TransferHost(p); return; }
+        foreach (var c in spectators)
+        {
+            var p = c.identity != null ? c.identity.GetComponent<Player>() : null;
+            if (p != null) { TransferHost(p); return; }
+        }
+        hostConnection = null;
+        hostToken = "";
+    }
+
+    // 参加人数(席のある人)が設定の上限を超えていないか。開始時に確認する。
+    public bool ParticipantsWithinLimit => PresentCount <= gameManager.MaxPlayers;
 
     // 席そのものを取り除き、後ろの席の番号を詰める(ゲーム外でのみ使う)
     [Server]
@@ -188,6 +329,7 @@ public class Room
 
         var playerCom = obj.GetComponent<Player>();
         int id = playerComponents.Count;
+        playerCom.playerName = "Bot" + (id + 1);
         playerCom.Setup(this, id);
         playerCom.gameManager = gameManager;
         // matchIdはSpawnより前に設定する(NetworkMatchはインタレスト管理のため、
@@ -196,12 +338,86 @@ public class Room
 
         NetworkServer.Spawn(obj);
 
+        // Botにも席の持ち主の印を持たせる(デバッグで「抜ける→戻る」を試せるように)
+        string token = "bot:" + Guid.NewGuid().ToString("N");
+        playerCom.clientToken = token;
         playerComponents.Add(playerCom);
-        seatTokens.Add("");   // Botは戻ってこないので識別子は持たない
+        seatTokens.Add(token);
         gameManager.AddPlayer();
         gameManager.RefreshLobbyStatus();
+        NineDebugLog.Add(roomId, "Bot追加: 席" + id);
 
         return playerCom;
+    }
+
+    // 接続を持たないPlayer(Bot)か
+    public static bool IsBot(Player p) => p != null && p.connectionToClient == null;
+
+    // 席の持ち主がBotか(空席でも判定できる)
+    public bool DebugSeatIsBot(int idx) => idx >= 0 && idx < seatTokens.Count && seatTokens[idx].StartsWith("bot:");
+
+    // 空席idxに戻れるBot(抜けたBot)を探す
+    public Player DebugFindAwayBot(int idx, IEnumerable<Player> candidates)
+    {
+        if (idx < 0 || idx >= seatTokens.Count || playerComponents[idx] != null) return null;
+        foreach (var c in candidates)
+            if (c != null && c.clientToken == seatTokens[idx]) return c;
+        return null;
+    }
+
+    // デバッグ専用: Botを部屋から抜けさせる。人間のLeave(RemovePlayer)と同じ扱いにする。
+    // ゲーム中なら席は空席として残り、Botのオブジェクトは戻るときのために残す。
+    // ゲーム外なら席ごと取り除き、Botも消す。
+    [Server]
+    public bool DebugBotLeave(Player bot)
+    {
+        if (!IsBot(bot)) return false;
+        int idx = playerComponents.IndexOf(bot);
+        if (idx < 0) return false;
+
+        bool keepSeat = gameManager != null && gameManager.inProgress;
+        if (keepSeat) playerComponents[idx] = null;
+        else RemoveSeatAt(idx);
+
+        bot.inRoom = false;
+        bot.isReadyToStart = false;
+        bot.isReadytoTurn = false;
+        bot.isReadyForNextRound = false;
+        bot.pendingSelection = -1;
+        bot.room = null;
+        bot.gameManager = null;
+        // 本物の退出と同じく、部屋の人からは見えなくする
+        bot.GetComponent<NetworkMatch>().matchId = Guid.Empty;
+        NineDebugLog.Add(roomId, "Bot退出: 席" + idx + (keepSeat ? "(空席として残す)" : "(席を削除)"));
+
+        if (!keepSeat) NetworkServer.Destroy(bot.gameObject);
+        gameManager.RefreshLobbyStatus();
+        return true;
+    }
+
+    // デバッグ専用: 抜けたBotを元の席に戻す(TryReclaimSeatのBot版)
+    [Server]
+    public bool DebugBotRejoin(Player bot)
+    {
+        if (!IsBot(bot) || gameManager == null || !gameManager.inProgress) return false;
+        for (int i = 0; i < playerComponents.Count; i++)
+        {
+            if (playerComponents[i] != null || seatTokens[i] != bot.clientToken) continue;
+            playerComponents[i] = bot;
+            bot.GetComponent<NetworkMatch>().matchId = matchId;
+            bot.Setup(this, i);
+            bot.gameManager = gameManager;
+            bot.isRoomHost = false;
+            bot.isReadyToStart = false;
+            bot.isReadytoTurn = false;
+            bot.isReadyForNextRound = false;
+            bot.pendingSelection = -1;
+            gameManager.RestoreSeat(i);
+            gameManager.RefreshLobbyStatus();
+            NineDebugLog.Add(roomId, "Bot復帰: 席" + i);
+            return true;
+        }
+        return false;
     }
 #endif
 
@@ -213,27 +429,30 @@ public class Room
         gameManager.DeleteMatch();
     }
 
+    // 戻り値: パスワードが違うときfalse(入室しなかった)
     [Server]
-    public void JoinRoom(NetworkConnectionToClient conn, string password, string token)
+    public bool JoinRoom(NetworkConnectionToClient conn, string password, string token)
     {
-        if (this.password != password) return;
+        if (this.password != password) return false;
 
         var playerCom = conn.identity != null ? conn.identity.GetComponent<Player>() : null;
-        if (playerCom == null) return;
-        if (playerComponents.Contains(playerCom)) return; // 既にこの部屋にいる
+        if (playerCom == null) return true;
+        if (players.Contains(conn)) return true; // 既にこの部屋にいる
 
         if (gameManager.inProgress)
         {
-            // ゲーム中は新しい人は入れない。
-            // 途中で抜けた本人が、自分の席に戻る場合だけ受け付ける。
-            TryReclaimSeat(conn, token);
-            return;
+            // ゲーム中に入ってきた人は、自分の席に戻れるならプレイヤーとして、
+            // そうでなければ観戦者として迎える。
+            if (!TryReclaimSeat(conn, token)) AddSpectator(conn, token);
+            return true;
         }
 
         RemoveEmptySeats();
-        if (playerComponents.Count >= gameManager.MaxPlayers) return; // 参加人数上限に達している
+        // 席が埋まっていたら、まず観戦者として迎える(本人が「参加する」に切り替えられる)
+        if (playerComponents.Count >= gameManager.MaxPlayers) { AddSpectator(conn, token); return true; }
 
         AddPlayer(conn, token);
+        return true;
     }
 
     [Server]

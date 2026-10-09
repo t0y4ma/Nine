@@ -48,14 +48,9 @@ public class myNetworkManager : NetworkManager
             return;
         }
 
-        // WebGLではHostが押せないため、どうせ押せないなら自動でConnectを試みる。
-        // "Manager"(ロビーUI)は接続が確立するまで非アクティブでRefreshLobbyPanelsが動かないため、
-        // ConnectPanel(Host/Connect/Server)はここで直接隠しておく。
+        // WebGLではHostが押せないため、自動でConnectを試みる(画面は接続中の表示になる)。
         if (Application.platform == RuntimePlatform.WebGLPlayer)
         {
-            var connectPanel = GameObject.Find("ConnectPanel");
-            if (connectPanel != null) connectPanel.SetActive(false);
-
             networkAddress = ProductionServerAddress;
             StartClient();
         }
@@ -99,12 +94,8 @@ public class myNetworkManager : NetworkManager
     {
         if (!_hasEverConnected)
         {
-            // "Manager"(ロビーUI)は未接続時は非アクティブで見つからないため、
-            // 常に存在するStatusTextを直接操作して失敗を知らせる。
-            // 接続先を手入力させるのはセキュリティ・UX上望ましくないため、ConnectPanelは再表示しない。
-            var statusGo = GameObject.Find("StatusText");
-            var tmp = statusGo != null ? statusGo.GetComponent<TMPro.TextMeshProUGUI>() : null;
-            if (tmp != null) tmp.text = "Could not find a server to connect to.";
+            // 画面(UIEventsManager)は接続前から動いているので、そこに失敗を知らせる。
+            UIEventsManager.Current?.ShowConnectError("サーバーに接続できませんでした。時間をおいて、ページを読み込み直してください。");
         }
         base.OnClientDisconnect();
     }

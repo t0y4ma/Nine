@@ -60,7 +60,7 @@ public class Player : NetworkBehaviour
     public void TargetLeftRoom(NetworkConnection target)
     {
         myRoomId = "";
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.ShowRoomSelectAfterLeave();
     }
 
@@ -70,8 +70,32 @@ public class Player : NetworkBehaviour
         myRoomId = roomId;
     }
 
-    [SyncVar]
+    [SyncVar(hook = nameof(OnNameChanged))]
     public string playerName;
+
+    private void OnNameChanged(string oldVal, string newVal)
+    {
+        var uiManager = UIEventsManager.Current;
+        uiManager?.RefreshLobbyPanels();
+        uiManager?.RefreshBoardViews();
+    }
+
+    public const int NAME_MAX = 12;
+
+    // 表示名を設定する。タグ記号は表示を壊すので取り除き、長さも制限する。
+    [Command]
+    public void CmdSetName(string name)
+    {
+        playerName = SanitizeName(name);
+    }
+
+    public static string SanitizeName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "";
+        name = name.Replace("<", "").Replace(">", "").Replace("\n", "").Replace("\r", "").Trim();
+        if (name.Length > NAME_MAX) name = name.Substring(0, NAME_MAX);
+        return name;
+    }
     [SyncVar]
     public int playerId;
     [SyncVar]
@@ -95,6 +119,18 @@ public class Player : NetworkBehaviour
     [SyncVar(hook = nameof(OnIsRoomHostChanged))]
     public bool isRoomHost;
 
+    // 観戦しているか。trueなら席を持たず、ゲームには参加しない。
+    // 人数の数え方(参加人数・一覧の表示数)や画面の出し分けは、この値に従う。
+    [SyncVar(hook = nameof(OnIsSpectatorChanged))]
+    public bool isSpectator;
+
+    private void OnIsSpectatorChanged(bool oldVal, bool newVal)
+    {
+        var uiManager = UIEventsManager.Current;
+        uiManager?.RefreshLobbyPanels();
+        uiManager?.RefreshBoardViews();
+    }
+
     public int GetPlayerId()
     {
         return playerId;
@@ -110,6 +146,7 @@ public class Player : NetworkBehaviour
         }
         this.room = room;
         this.playerId = playerId;
+        isSpectator = false;
         int cardCnt = room.gameManager.CARDCOUNT;
         // 前に入っていた部屋の手札が残っていると、Addで後ろに継ぎ足されて枚数が増えてしまう。
         // 毎回作り直す。
@@ -119,10 +156,25 @@ public class Player : NetworkBehaviour
         inRoom = true;
     }
 
+    // 観戦者として部屋に入る。手札は持たない。
+    [Server]
+    public void SetupSpectator(Room room)
+    {
+        if (room != null && connectionToClient != null)
+        {
+            myRoomId = room.roomId;
+            TargetSetRoomId(connectionToClient, room.roomId);
+        }
+        this.room = room;
+        cards.Clear();
+        used.Clear();
+        inRoom = true;
+    }
+
     [Command]
     public void CmdSetReady(bool ready)
     {
-        if (room == null) return;
+        if (room == null || isSpectator) return;
         if (gameManager != null && gameManager.inProgress) return;
         isReadyToStart = ready;
         if (gameManager != null) gameManager.RefreshLobbyStatus();
@@ -131,20 +183,20 @@ public class Player : NetworkBehaviour
     private void OnInRoomChanged(bool oldVal, bool newVal)
     {
         if (!isOwned) return;
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshLobbyPanels();
     }
 
     private void OnIsRoomHostChanged(bool oldVal, bool newVal)
     {
         if (!isOwned) return;
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshLobbyPanels();
     }
 
     private void OnReadyChanged(bool oldVal, bool newVal)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshLobbyPanels();
     }
 
@@ -165,7 +217,7 @@ public class Player : NetworkBehaviour
 
     private void OnUsedChanged(SyncList<bool>.Operation op, int index, bool oldItem, bool newItem)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshBoardViews();
     }
 
@@ -174,7 +226,7 @@ public class Player : NetworkBehaviour
         // 提出状態が変わったので、盤面の表示を更新する。
         // 以前は廃止済みのRoundResultPanelだけを更新しており、
         // 手札のグレーアウトや「今出したカード」に反映されていなかった。
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshBoardViews();
     }
 

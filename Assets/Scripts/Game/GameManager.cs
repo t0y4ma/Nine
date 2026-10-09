@@ -16,6 +16,10 @@ public class GameManager : NetworkBehaviour
     private int roundsPlayed = 0;
 
     private const float ROUND_TRANSITION_DELAY = 5.0f; // 最大の緩衝時間(秒)。全員がNextを押せばこれより早く進む
+    // ラウンド結果を画面中央に出しておく時間(秒)。
+    // 最終ラウンドでは、この時間が過ぎるまではゲーム結果に進まない。
+    // (全員がNextを押すと、結果を見る前にゲーム結果が出てしまっていた)
+    public const float RESULT_POPUP_SECONDS = 4.0f;
     private const float TRANSITION_PROGRESS_SEND_INTERVAL = 0.1f; // 進捗バー送信間隔(秒)
     // ラウンドの選択時間(秒)。ホストが設定画面のスライダーで変更する。
     // 30秒~5分を15秒刻みで選べ、0は無制限を表す。
@@ -30,17 +34,20 @@ public class GameManager : NetworkBehaviour
     // カード枚数の上限。「ハゲタカの餌食」(15枚)を包摂できる範囲とする。
     // これ以上増やすと、人数が多い場合に使用済み一覧が判読不能な大きさまで縮む。
     public const int CARD_COUNT_LIMIT = 15;
-    [SyncVar] public int CARDCOUNT = 9;
-    [SyncVar] public int ScoringMode = 0; // 0=ラウンド勝利で1pt、1=相手が出したカード数字の合計をpt、2=得点カード(ハゲタカのえじき)
+    public const int CARD_COUNT_DEFAULT = 9;
+    [SyncVar] public int CARDCOUNT = CARD_COUNT_DEFAULT;
+    [SyncVar] public int ScoringMode = SCORING_DEFAULT; // 0=ラウンド勝利で1pt、1=相手が出したカード数字の合計をpt、2=得点カード(ハゲタカのえじき)
     public const int SCORING_FIXED = 0;
     public const int SCORING_SUM = 1;
     public const int SCORING_POINT_CARDS = 2;
+    // 部屋を作ったときの得点方式: 相手が出したカードの数字の合計
+    public const int SCORING_DEFAULT = SCORING_SUM;
 
     // ===== 得点カード(ハゲタカのえじき)モード =====
     // 毎ラウンド得点カードを1枚めくり、単独で最大(マイナスなら単独で最小)の数字を出した人が取る。
     // 同じ数字を出した人同士は無効(バッティング)。全員無効なら次のラウンドへ持ち越す。
     // 今のラウンドの得点カード
-    [SyncVar] public int currentPointCard;
+    [SyncVar(hook = nameof(OnPointCardStateChanged))] public int currentPointCard;
     // 前のラウンドから持ち越している得点カード(古い順)。
     // 合計ではなくカードそのものを持つ(表示側で1枚ずつ並べるため)。
     public readonly SyncList<int> carriedPointCards = new();
@@ -52,7 +59,22 @@ public class GameManager : NetworkBehaviour
         return sum;
     }
     // 山札の残り枚数(今めくった分を除く)
-    [SyncVar] public int pointCardsLeft;
+    [SyncVar(hook = nameof(OnPointCardStateChanged))] public int pointCardsLeft;
+
+    // 得点カードの状態(今の得点カード・残り枚数・持ち越し)が届いたら表示に反映する。
+    // ラウンド開始の通知(Rpc)だけに頼ると、ゲーム開始直後は画面の準備より先に届いて
+    // 1ラウンド目だけ表示されないことがあったため、値そのものの変化でも更新する。
+    private void OnPointCardStateChanged(int oldValue, int newValue)
+    {
+        var ui = UIEventsManager.Current;
+        ui?.RefreshPointCardFromGame(this);
+    }
+
+    private void OnCarriedPointCardsChanged(SyncList<int>.Operation op, int index, int oldItem, int newItem)
+    {
+        var ui = UIEventsManager.Current;
+        ui?.RefreshPointCardFromGame(this);
+    }
     // 山札(サーバーのみ)。ゲーム開始時にシャッフルし、ラウンドごとに先頭から使う
     private readonly List<int> pointDeck = new();
 
@@ -83,6 +105,32 @@ public class GameManager : NetworkBehaviour
     [SyncVar(hook = nameof(OnInProgressChanged))] public bool inProgress;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int readyCount;
     [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int totalPlayerCount;
+    // 観戦者の人数。参加人数(totalPlayerCount)には含めない。
+    [SyncVar(hook = nameof(OnLobbyStatusChanged))] public int spectatorCount;
+
+    // 観戦者だけに、今のラウンドで各席が確定したカードを送る。
+    // プレイヤーに送ると手の内が漏れるので、必ず観戦者の接続だけに送る(TargetRpc)。
+    [Server]
+    public void SendSpectatorSnapshot(NetworkConnectionToClient conn)
+    {
+        if (conn == null) return;
+        TargetSpectatorPicks(conn, turncards.ToArray());
+    }
+
+    [Server]
+    private void SendSpectatorUpdates()
+    {
+        if (room == null || room.spectators.Count == 0) return;
+        var picks = turncards.ToArray();
+        foreach (var c in room.spectators) if (c != null) TargetSpectatorPicks(c, picks);
+    }
+
+    [TargetRpc]
+    private void TargetSpectatorPicks(NetworkConnection target, int[] picks)
+    {
+        var uiManager = UIEventsManager.Current;
+        uiManager?.ShowSpectatorPicks(picks);
+    }
 
     [Server]
     public void DeleteMatch()
@@ -105,6 +153,7 @@ public class GameManager : NetworkBehaviour
         // 途中参加時に、SyncListの同期で表示が追いつくようにするため。
         roundWins.Callback += OnScoreOrPicksChanged;
         lastRevealedPicks.Callback += OnScoreOrPicksChanged;
+        carriedPointCards.Callback += OnCarriedPointCardsChanged;
 
         // Callbackは購読後の変更しか拾わない。
         // 後から入室した場合や、スポーン時点で既に履歴がある場合に
@@ -114,7 +163,7 @@ public class GameManager : NetworkBehaviour
 
         // ゲーム中の部屋に戻ってきた場合、このオブジェクトが届くのは入室より後になる。
         // その時点ではまだ「ゲーム中」と判定できずロビー表示になっているので、ここで画面を合わせ直す。
-        var ui = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var ui = UIEventsManager.Current;
         if (ui != null)
         {
             ui.RefreshLobbyPanels();
@@ -132,25 +181,26 @@ public class GameManager : NetworkBehaviour
         used_Players.Callback -= OnUsedPlayersChanged;
         roundWins.Callback -= OnScoreOrPicksChanged;
         lastRevealedPicks.Callback -= OnScoreOrPicksChanged;
+        carriedPointCards.Callback -= OnCarriedPointCardsChanged;
         roundHistoryLog.Callback -= OnRoundHistoryChanged;
         base.OnStopClient();
     }
 
     private void OnScoreOrPicksChanged(SyncList<int>.Operation op, int index, int oldItem, int newItem)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshBoardViews();
     }
 
     private void OnUsedPlayersChanged(SyncList<bool>.Operation op, int index, bool oldItem, bool newItem)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshBoardViews();
     }
 
     private void OnRoundHistoryChanged(SyncList<string>.Operation op, int index, string oldItem, string newItem)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
         if (op == SyncList<string>.Operation.OP_ADD)
@@ -179,9 +229,9 @@ public class GameManager : NetworkBehaviour
         if (room != null) room.RemoveEmptySeats();
         newCardCount = Mathf.Clamp(newCardCount, 3, CARD_COUNT_LIMIT);
         newScoringMode = Mathf.Clamp(newScoringMode, SCORING_FIXED, SCORING_POINT_CARDS);
-        // 上限は、既に参加している人数を下回らないようにする(既存プレイヤーが弾き出されないため)
-        int currentPlayerCount = room != null ? room.playerComponents.Count : 0;
-        newMaxPlayers = Mathf.Clamp(newMaxPlayers, Mathf.Max(2, currentPlayerCount), MAX_PLAYERS_LIMIT);
+        // 上限は今の参加人数を下回ってもよい(開始時に「上限を超えています」と知らせる)。
+        // 下げられないと、観戦へ切り替えて人数を減らす運用ができないため。
+        newMaxPlayers = Mathf.Clamp(newMaxPlayers, 2, MAX_PLAYERS_LIMIT);
 
         CARDCOUNT = newCardCount;
         ScoringMode = newScoringMode;
@@ -212,6 +262,7 @@ public class GameManager : NetworkBehaviour
             p.cards.Clear();
             for (int c = 1; c <= CARDCOUNT; c++) p.cards.Add(c);
         }
+        RefreshLobbyStatus();
     }
 
     // 席を取り除くときに、その席のデータも取り除く。
@@ -286,6 +337,7 @@ public class GameManager : NetworkBehaviour
         // 前のゲームで抜けたまま戻らなかった人の空席を片付けてから始める
         room.RemoveEmptySeats();
         inProgress = true;
+        RefreshLobbyStatus();
         for (int i = 0; i < used_Players.Count; i++) used_Players[i] = false;
         for (int i = 0; i < turncards.Count; i++) turncards[i] = 0;
         for (int i = 0; i < roundWins.Count; i++) roundWins[i] = 0;
@@ -305,20 +357,56 @@ public class GameManager : NetworkBehaviour
             for (int i = 0; i < playerCom.used.Count; i++) playerCom.used[i] = false;
         }
 
+        NineDebugLog.Add(room?.roomId, "ゲーム開始: " + room?.PresentCount + "人 / " + CARDCOUNT + "枚 / 方式" + ScoringMode
+            + " / 制限" + (RoundTimeLimit <= 0 ? "なし" : RoundTimeLimit + "s"));
         RpcRefreshBoard();
         StartRound();
     }
 
     // 確定を取り消す。ラウンド解決前のみ有効。
+    // ラウンド中(結果を出す前)だけtrue。結果が出た後の確定・取り消しは受け付けない。
+    // (受け付けると、公開済みのカードが手札に戻るなど記録と食い違う)
+    private bool acceptingCards;
+
+    // 結果公開後、次ラウンドへ進むまでの待ち時間中か(Nextの受付中)
+    private bool inTransition;
+    // ラウンドの残り時間(サーバー側)。無制限で待っている間はInfinity。デバッグ表示用
+    private float timerRemaining;
+    // デバッグ操作の要求(ルーチンの中で読み取って反映する)
+    private bool debugSkipTimer;
+    private bool debugSkipTransition;
+    private bool debugPauseTimer;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+    // ---- デバッグ窓(Nine/オンライン デバッグ)とテスト用ボットが読む、サーバー側の状態 ----
+    public bool DebugAcceptingCards => acceptingCards;
+    public bool DebugInTransition => inTransition;
+    public int DebugRoundsPlayed => roundsPlayed;
+    public float DebugTimerRemaining => timerRemaining;
+    public bool DebugTimerPaused => debugPauseTimer;
+    // 席ごとの今ラウンドの確定カード(1始まり、0=未確定)。公開前の秘密なのでクライアントには送らない
+    public int DebugTurnCard(int seat) => seat >= 0 && seat < turncards.Count ? turncards[seat] : 0;
+    public IReadOnlyList<int> DebugPointDeck => pointDeck;
+
+    // 残り時間をすぐ0にする(未確定の人はランダム提出になる)
+    [Server] public void DebugSkipTimer() => debugSkipTimer = true;
+    // 次ラウンドへの待ち時間を飛ばす
+    [Server] public void DebugSkipTransition() => debugSkipTransition = true;
+    // 残り時間を止める/動かす
+    [Server] public void DebugSetTimerPaused(bool paused) => debugPauseTimer = paused;
+#endif
+
     [Server]
     public void CancelCard(int id)
     {
-        if (!inProgress) return;
+        if (!inProgress || !acceptingCards) return;
         if (id < 0 || id >= turncards.Count) return;
         if (turncards[id] == 0) return;   // まだ出していない
 
         int cardindex = turncards[id] - 1;
         turncards[id] = 0;
+        NineDebugLog.Add(room?.roomId, "席" + id + ": 取り消し(" + (cardindex + 1) + ")");
+        SendSpectatorUpdates();
 
         var pl = (room != null && id < room.playerComponents.Count) ? room.playerComponents[id] : null;
         if (pl != null)
@@ -334,6 +422,7 @@ public class GameManager : NetworkBehaviour
     [Server]
     public bool UseCard(int id, int cardindex)
     {
+        if (!acceptingCards) return false;
         if (used_Players.Count / CARDCOUNT <= id) return false;
         if (used_Players[id * CARDCOUNT + cardindex]) return false;
         if (turncards[id] != 0) return false;
@@ -342,6 +431,8 @@ public class GameManager : NetworkBehaviour
         // 更新するとラウンド終了前に「誰が何を出したか」が
         // 一覧から読み取れてしまう。公開はResolveRoundで行う。
         turncards[id] = cardindex + 1;
+        NineDebugLog.Add(room?.roomId, "席" + id + ": 確定 " + (cardindex + 1));
+        SendSpectatorUpdates();
 
         var actingPlayer = room.playerComponents[id];
         actingPlayer.isReadytoTurn = true;
@@ -368,18 +459,22 @@ public class GameManager : NetworkBehaviour
         }
         // 得点カードはRpcの引数でも渡す(SyncVarより先にRpcが届いても表示できるように)
         RpcRoundStartCutIn(roundsPlayed + 1, CARDCOUNT, pointMode, currentPointCard, carriedPointCards.ToArray(), pointCardsLeft);
+        acceptingCards = true;
+        SendSpectatorUpdates();   // 新しいラウンドなので観戦者の表示も白紙に戻す
+        NineDebugLog.Add(room?.roomId, "ラウンド" + (roundsPlayed + 1) + " 開始"
+            + (pointMode ? "  得点カード " + FormatPoints(currentPointCard) + "(残り" + pointCardsLeft + "枚)" : "")
+            + (carriedPointCards.Count > 0 ? "  持ち越し [" + string.Join(",", carriedPointCards) + "]" : ""));
         StartCoroutine(RoundTimerRoutine());
     }
 
     [ClientRpc]
     private void RpcRoundStartCutIn(int roundNumber, int totalRounds, bool pointMode, int pointCard, int[] carriedCards, int cardsLeft)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
-        uiManager?.ShowRoundCutIn(roundNumber, totalRounds,
-            pointMode ? "Card " + FormatPoints(pointCard) : null);
-        // ゲーム開始時は盤面を作った直後なので、画面サイズに合わせてレイアウトを組み直す。
-        // (StartGameの盤面更新Rpcの後に届くので、この時点でカードは揃っている)
-        if (roundNumber == 1) uiManager?.RequestFullLayoutRebuild();
+        var uiManager = UIEventsManager.Current;
+        uiManager?.ShowRoundCutIn(roundNumber, totalRounds, pointMode, pointCard);
+        // ラウンド開始時は毎回、画面全体を組み直す(実行はこのフレームのLateUpdate)。
+        // 得点カードや持ち越しの枚数、盤面の更新など、ラウンド開始の通知がすべて届いた後に1回だけ行われる。
+        uiManager?.RequestFullLayoutRebuild();
         // 新ラウンドが始まったら前ラウンドの結果表示は消す
         uiManager?.HideRoundResultPopup();
         // 前ラウンドの結果表示が残り続けないよう、新しいラウンドの開始時にクリアする
@@ -400,10 +495,19 @@ public class GameManager : NetworkBehaviour
         // (確定待ちの間は満タンのまま表示される)
         float barTotal = unlimited ? ROUND_TIME_CHMIN : RoundTimeLimit;
         float lastSent = -1f;
-        RpcRoundTimer(barTotal, barTotal);
+        // 無制限のときは、確定待ちの間はバーを出さない(-1で非表示を指示する)。
+        // 全員が確定して残りが短縮された時点から、残り数秒をバーで見せる。
+        RpcRoundTimer(unlimited ? -1f : barTotal, barTotal);
+        debugSkipTimer = false;
 
         while (remaining > 0f)
         {
+            if (debugSkipTimer)
+            {
+                debugSkipTimer = false;
+                remaining = 0f;
+                break;
+            }
             if (AllPresent(p => p.isReadytoTurn))
             {
                 remaining = Mathf.Min(remaining, ROUND_TIME_CHMIN);
@@ -417,10 +521,12 @@ public class GameManager : NetworkBehaviour
                 RpcRoundTimer(Mathf.Max(0, remaining), barTotal);
             }
 
+            timerRemaining = remaining;
             yield return null;
-            remaining -= Time.deltaTime;
+            if (!debugPauseTimer) remaining -= Time.deltaTime;
         }
 
+        timerRemaining = 0f;
         RpcRoundTimer(0, barTotal);
 
         StartCoroutine(EndTurnRoutine());
@@ -429,14 +535,14 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     private void RpcRoundTimer(float remaining, float total)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.UpdateRoundTimerBar(total > 0 ? remaining / total : 0);
     }
 
     [ClientRpc]
     private void RpcRefreshMyHand()
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
         var localPlayer = uiManager.GetDebugOrLocalPlayer();
@@ -448,6 +554,7 @@ public class GameManager : NetworkBehaviour
     [Server]
     private System.Collections.IEnumerator EndTurnRoutine()
     {
+        acceptingCards = false;
         ResolveRound(turncards);
 
         RpcRoundTransitionProgress(1f); // バーを満タン状態で表示開始
@@ -457,10 +564,16 @@ public class GameManager : NetworkBehaviour
 
         float elapsed = 0f;
         float lastSent = -1f;
+        inTransition = true;
+        debugSkipTransition = false;
+        // 最終ラウンドは、結果を見せ終えてからゲーム結果に進む
+        bool gameEnded = (roundsPlayed >= CARDCOUNT);
+        float minHold = gameEnded ? RESULT_POPUP_SECONDS : 0f;
         while (elapsed < ROUND_TRANSITION_DELAY)
         {
-            if (AllPresent(p => p.isReadyForNextRound))
+            if (elapsed >= minHold && AllPresent(p => p.isReadyForNextRound))
                 break;
+            if (debugSkipTransition) { debugSkipTransition = false; break; }
 
             yield return null;
             elapsed += Time.deltaTime;
@@ -473,12 +586,12 @@ public class GameManager : NetworkBehaviour
         }
 
         RpcRoundTransitionProgress(0f);
+        inTransition = false;
 
         // ゲーム終了の判定・表示は、盤面をクリアする「前」に行う。
         // 以前は盤面をクリアしてロビー状態に戻した後にGameOverを表示していたため、
         // 最終ラウンドの結果(誰が何を出したか)が画面から消えた状態で結果発表される、
         // という分かりにくい挙動になっていた。
-        bool gameEnded = (roundsPlayed >= CARDCOUNT);
         if (gameEnded)
         {
             CheckGameOver();
@@ -505,7 +618,7 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     private void RpcRoundTransitionProgress(float remainingFraction)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.UpdateTransitionBar(remainingFraction);
     }
 
@@ -584,6 +697,8 @@ public class GameManager : NetworkBehaviour
             ResolveHighestCardRound(playedCards, winners, out resultLabel, out message, out winnerLabel);
 
         roundsPlayed++;
+        NineDebugLog.Add(room?.roomId, "ラウンド" + roundsPlayed + " 結果: [" + string.Join(",", playedCards) + "] 勝者[" + string.Join(",", winners) + "] " + resultLabel
+            + "  得点[" + string.Join(",", roundWins) + "]");
 
         // 履歴ログの1行を、クライアント側でリッチUIに変換できるよう構造化した形式で記録する。
         // 形式: "roundNumber|card0,card1,...|winnerId|tie|resultLabel|winner0,winner1,..."
@@ -594,8 +709,8 @@ public class GameManager : NetworkBehaviour
         roundHistoryLog.Add(roundsPlayed + "|" + cardsCsv + "|" + winnerId + "|" + (tie ? "1" : "0") + "|"
             + resultLabel + "|" + string.Join(",", winners));
 
-        RpcRoundResult("Round " + roundsPlayed + "/" + CARDCOUNT + ": " + message,
-            lastRevealedPicks.ToArray(), winners.ToArray(), winnerLabel);
+        // 文言は表示側(日本語UI)で組み立てる。ここでは結果の材料だけを渡す
+        RpcRoundResult(roundsPlayed, CARDCOUNT, lastRevealedPicks.ToArray(), winners.ToArray(), resultLabel, winnerLabel);
         // 公開値を明示的に渡すことで、遷移が始まった直後から表示されるようにする
         RpcRevealBoard(lastRevealedPicks.ToArray(), roundWins.ToArray());
     }
@@ -706,17 +821,15 @@ public class GameManager : NetworkBehaviour
     }
 
     [ClientRpc]
-    private void RpcRoundResult(string message, int[] picks, int[] winners, string winnerLabel)
+    private void RpcRoundResult(int roundNumber, int totalRounds, int[] picks, int[] winners, string resultLabel, string winnerLabel)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
-        uiManager.ShowResult(message);
         // 結果を画面中央に大きく表示する(遷移時間のあいだだけ)
         // picksはRpcの引数で受け取る。
         // SyncListを参照すると、同期が間に合わず空のまま表示されることがある。
-        uiManager.ShowRoundResultPopup(picks, winners, message, winnerLabel,
-            4f);   // 表示時間は4秒
+        uiManager.ShowRoundResult(roundNumber, totalRounds, picks, winners, resultLabel, winnerLabel, RESULT_POPUP_SECONDS);
     }
 
     // 公開されたカードをRpcの引数で直接渡す。
@@ -726,7 +839,7 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     private void RpcRevealBoard(int[] revealedPicks, int[] scores) // Mirrorの制約でRpcに省略可能引数は使えない
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
         // 公開カードと得点をRpcの引数で直接渡す。
@@ -778,32 +891,24 @@ public class GameManager : NetworkBehaviour
         }
         RefreshLobbyStatus();
 
-        // 最終スコア一覧を組み立てて渡す(誰が何ptで勝ったかが分かるようにする)
-        var scoreSb = new System.Text.StringBuilder();
-        for (int i = 0; i < finalScores.Count; i++)
-        {
-            string pname = (i < room.playerComponents.Count && room.playerComponents[i] != null
-                            && !string.IsNullOrEmpty(room.playerComponents[i].playerName))
-                ? room.playerComponents[i].playerName
-                : ("Player " + i);
-            scoreSb.AppendLine(pname + ": " + finalScores[i] + " pt");
-        }
+        // 優勝者(最高点の全員)はサーバーが決めて渡す。表示側は順位表を作るだけ。
+        var winnerIds = new List<int>();
+        for (int i = 0; i < finalScores.Count; i++) if (finalScores[i] == best) winnerIds.Add(i);
 
-        RpcGameOver(winnerId, tie, best, scoreSb.ToString());
+        NineDebugLog.Add(room?.roomId, "ゲーム終了: " + (tie ? "引き分け" : "席" + winnerId + "の勝ち") + " (" + best + "pt)  得点[" + string.Join(",", finalScores) + "]");
+        RpcGameOver(finalScores.ToArray(), winnerIds.ToArray());
     }
 
     [ClientRpc]
-    private void RpcGameOver(int winnerId, bool tie, int winningScore, string scoreBoard)
+    private void RpcGameOver(int[] finalScores, int[] winnerIds)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
-        string headline = tie
-            ? ("It's a tie! (" + winningScore + " pt)")
-            : ("Player " + winnerId + " wins with " + winningScore + " pt!");
-        // 結果はGameOverPanelに大きく表示するため、StatusText側には出さない。
-        // (StatusTextに出すと、ロビーに戻った後も前ゲームの結果が残って見え続けてしまう)
-        uiManager.ShowGameOverPanel("GAME OVER\n\n" + headline + "\n\n" + scoreBoard);
+        // ゲーム結果を出すときは、ラウンド結果の表示は役目を終えているので閉じる。
+        // (閉じないと、ゲーム結果を先に閉じたときにラウンド結果だけが残ってしまう)
+        uiManager.HideRoundResultPopup();
+        uiManager.ShowGameOver(finalScores, winnerIds);
     }
 
     [Server]
@@ -815,24 +920,26 @@ public class GameManager : NetworkBehaviour
         foreach (var p in room.playerComponents) if (p != null && p.isReadyToStart) ready++;
         readyCount = ready;
         totalPlayerCount = room.PresentCount;
+        spectatorCount = room.SpectatorCount;
+        if (RoomManager.Instance != null) RoomManager.Instance.UpdateRoomSummary(room);
     }
 
     private void OnLobbyStatusChanged(int oldVal, int newVal)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.UpdateLobbyStatus(readyCount, totalPlayerCount);
     }
 
     private void OnInProgressChanged(bool oldVal, bool newVal)
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         uiManager?.RefreshLobbyPanels();
     }
 
     [ClientRpc]
     private void RpcRefreshBoard()
     {
-        var uiManager = GameObject.Find("Manager")?.GetComponent<UIEventsManager>();
+        var uiManager = UIEventsManager.Current;
         if (uiManager == null) return;
 
         var localPlayer = uiManager.GetDebugOrLocalPlayer();

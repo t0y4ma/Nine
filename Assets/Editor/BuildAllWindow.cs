@@ -592,7 +592,7 @@ public class BuildAllWindow : EditorWindow
         {
             if (!IsLinuxSysrootReady())
             {
-                EditorUtility.DisplayDialog(
+                Notify(
                     "Build Error",
                     "Switched to Linux, but the Linux sysroot is still not available.\n\n" +
                     "Check that com.unity.sdk.linux-x86_64 and " +
@@ -760,11 +760,13 @@ public class BuildAllWindow : EditorWindow
             Debug.Log(
                 "ZIP: " + fullZipPath);
 
+            WriteResult(true, "OK", fullZipPath);
+
             Debug.Log(
                 "========================================");
 
 
-            EditorUtility.DisplayDialog(
+            Notify(
                 "Build Complete",
                 "Build completed successfully.\n\n" +
                 "ZIP:\n" +
@@ -774,9 +776,10 @@ public class BuildAllWindow : EditorWindow
         catch (Exception e)
         {
             Debug.LogException(e);
+            WriteResult(false, e.Message, "");
 
 
-            EditorUtility.DisplayDialog(
+            Notify(
                 "Build Error",
                 e.Message,
                 "OK");
@@ -790,6 +793,7 @@ public class BuildAllWindow : EditorWindow
             ResetStandaloneSubtarget();
 
             EditorUtility.ClearProgressBar();
+            SessionState.EraseBool(SilentKey);
         }
     }
 
@@ -1176,7 +1180,7 @@ public class BuildAllWindow : EditorWindow
     private void ShowValidationError(
         string message)
     {
-        EditorUtility.DisplayDialog(
+        Notify(
             "Invalid Settings",
             message,
             "OK");
@@ -1426,5 +1430,43 @@ public class BuildAllWindow : EditorWindow
                     i,
                     ""));
         }
+    }
+
+    // ============================================================
+    // 確認ダイアログを出さないビルド(エージェント・自動化用)
+    // ============================================================
+    //
+    // ダイアログはエディタを止めてしまい、外部(UnityMCPなど)から操作していると
+    // 誰かがOKを押すまで先に進めない。静かなモードではダイアログの代わりにログへ書き、
+    // 結果を Library/BuildAll/last-result.txt に残す。
+
+    private const string SilentKey = "BuildAllWindow_Silent";
+    public const string ResultPath = "Library/BuildAll/last-result.txt";
+
+    [MenuItem("Build/Build All (No Dialogs)")]
+    public static void BuildAllSilent()
+    {
+        SessionState.SetBool(SilentKey, true);
+        WriteResult(false, "RUNNING", "");
+        var window = GetWindow<BuildAllWindow>("Build Settings");
+        window.BuildAll();
+    }
+
+    private static void Notify(string title, string message, string ok)
+    {
+        if (SessionState.GetBool(SilentKey, false))
+        {
+            Debug.Log("[BuildAll] " + title + ": " + message);
+            if (title.Contains("Error") || title.Contains("Invalid")) WriteResult(false, message, "");
+            return;
+        }
+        EditorUtility.DisplayDialog(title, message, ok);
+    }
+
+    private static void WriteResult(bool success, string message, string zip)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(ResultPath));
+        File.WriteAllText(ResultPath,
+            "success=" + success + "\nmessage=" + message + "\nzip=" + zip + "\ntime=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
     }
 }
